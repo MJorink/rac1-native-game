@@ -271,6 +271,18 @@ water grids of Rilgar, Umbris and other levels) are drawn by draw-list callbacks
 against the game's 4:3 clip matrix; those draw lists run as shadow blocks too, with that matrix
 widened, and the GS replica walks each shadow's chain in place of the real block's (several
 substitutes a frame). Before this, tiles at the sides of a widened view were missing.
+Many of those callbacks test their cells with the game's point test (0x2002e0), which reads its own
+copies of the projection's tangents (0x16cd00..0x16cd2f), and the quad drawer (0x1fd228) rejects a
+quad past about twice the 4:3 frame's half width: the shadow blocks widen those too (keeping the
+guard band the game clips at). Before this, at 32:9 Gaspar's lava was still cut in the outer part of
+each side, and the effect quads (Rilgar's water quads, glows) were rejected there. What is still cut: a surface a moby's update queues
+only when the moby pass drew that moby in the last frame (moby +0x31, the 4:3 view's decision, which
+the shadows cannot change without changing the game's state): one of Rilgar's water patches (class 79),
+the ships' cockpit glass.
+The shadow runs also put back the collision routines' contact registers (vf25..vf29, which the port
+keeps outside the VU0 state): the ship's shadow callback (0x28e670, queued near the parked ship)
+probes the ground, and a shadow that probed where the real block did not left them changed for the
+game's next collision.
 Before this, the game's state diverged on most frames of the Veldin intro when the view was widened;
 after it, its state is identical at 4:3 and at 5120x1440.
 
@@ -301,6 +313,10 @@ and flashes, fades, and any effect the MRP does not take. The 2D maps cleanly to
 emulating it is simple and exact. What the game draws into its own memory to use as a texture (the
 menus' pictures, such as the ship's planet menu's planet, made of three blended layers) goes into a
 render target that keeps the GS's alpha (0x80 = 1.0); its blending reads that alpha at the GS's scale.
+With the modern renderer a font's glyph (a 16 x 16 or 24 x 16 texel cell, a quad whose texture coordinates follow x and y apart)
+is sampled only inside its own cell: scaled up from the PS2's resolution, the bilinear filtering of a glyph's outer half texel
+blended in the neighbouring glyphs' edges in the font's texture, thin lines under, over and through the letters (issue #76; the
+GS drew the glyphs 1:1, at its texels' centres). The faithful reference (`RAC1_MRP=0`) samples as the GS.
 Every ALPHA register's `(A - B) C + D` maps to the GL's blending (add, subtract or reverse subtract; the two
 combinations with a factor `1 + C` use 1), for the replica, the MRP's mobys, world and effects alike: the
 subtractive second pass of the force fields, Orxon's O2 barriers and Quartu's gates (`(Cd - Cs) FIX`) was drawn
