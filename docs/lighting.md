@@ -670,19 +670,37 @@ sun's place, the gain and the GPU time.
 
 ## Ambient occlusion
 
-Options > Graphics > Ambient Occlusion (`mrp_lighting_ao_pass`) is a screen-space ambient occlusion
-pass with five modes: SSAO (described below), SSAO+, HBAO, GTAO and GTAO at half resolution (the
-cheapest; at 5053x1371 on a Radeon 890M about 3.7, 4.0, 4.2, 5.2 and 3.3 ms of GPU). It runs after the mobys and before the GS replica's effects, particles and 2D (so those get none):
+Options > Graphics > Ambient Occlusion (`mrp_lighting_ao_pass`): a screen-space ambient occlusion
+pass after the mobys and before the GS replica's effects, particles and 2D (so those get none). The
+depth buffer is copied to a texture; per pixel the world position comes from the inverse
+view-projection; the result (8 bits) is blurred within the surface and multiplied into the colour
+(the sky untouched). Five modes:
 
-1. The depth buffer is copied to a texture, at the 3D's own resolution (the render-scale buffer when
-   scaling).
-2. For each pixel: the world position from the inverse view-projection, the face normal from
-   derivatives, then 12 cosine-weighted samples in the hemisphere, 0.9 units in radius scaled between
-   15 % and 100 %, rotated per pixel by interleaved gradient noise. A sample counts as occluded when it
-   lies behind the stored depth, with a range falloff.
-3. `AO = 1 - 0.7 * occluded / 12`, written to an 8-bit target, then blurred 5 x 5 with taps limited to
-   similar depths so the darkening does not bleed across edges.
-4. The frame's colour is multiplied by it; the sky is left alone.
+| Mode | Normal | Sampling | Reach, strength | Blur | GPU at 5053 x 1371 |
+|---|---|---|---|---|---|
+| SSAO | 2 x 2 derivatives | 12 points in the hemisphere, behind the depth = occluded | 1.5 units, 100 % | 5 x 5 within the surface | 5.2 ms |
+| SSAO+ | 4 neighbours, the smaller depth step (no 2 x 2 blocks, no false ridges at silhouettes) | as SSAO | 1.5 units, 120 % | separable bilateral 9 + 9 | 5.8 ms |
+| HBAO | as SSAO+ | 4 directions x 3 steps, the horizon's rise over the surface | 3 units, 200 % | separable | 7.3 ms |
+| GTAO | as SSAO+ | 3 slices x 2 sides x 3 steps, the cosine-weighted visible arc over the horizons, a multi-bounce tint | 3 units, 250 % | separable | 6.9 ms |
+| GTAO 1/2 | as SSAO+ | GTAO at half resolution, upsampled by the blur | as GTAO | separable | 4.4 ms |
+
+(Measured on Kerwan's plaza with a Radeon 890M; noisy by a few tenths.) The reach is capped on the
+screen: a surface close to the camera samples no further than 4 % of the view's height around it
+(most of the cost, for no visible change). `RAC1_AO_RADIUS` / `RAC1_AO_STRENGTH` (percent, testing)
+override every mode's reach and strength, `RAC1_AO_DUMP=1` writes the raw occlusion (`ao_<mode>.pgm`,
+the run's last frame) and prints its mean, `RAC1_AO_PROF=1` prints the pass's GPU time.
+
+**Why the modes looked the same until 0.4.x** (issue #75): every mode used a reach of 0.9 units and
+70 %, tiny at this game's scale (a crate is about 2 units): the raw occlusion averaged 250 to 254 of
+255 at Novalis's start, and the final picture changed by 0.3 to 1.4 levels of 255 on average, by
+any mode. The mode itself reached the shader. GTAO's integral was also wrong (a side with no
+occluder counted twice the visibility, clamped to 1, so a corner occluded on one side only showed
+nothing). Both fixed: each mode has its own reach and strength (above) and GTAO takes, per side,
+1 - the sine of the horizon's elevation.
+
+Not done (issue #75's further items): a Hi-Z depth pyramid (SAO) for large radii, bent normals
+(directional occlusion fed into the lighting), a normal G-buffer from the MRP's passes (smooth
+normals instead of the depth's faceted ones), ray-traced AO.
 
 ## The light editor
 
