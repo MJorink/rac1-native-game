@@ -218,6 +218,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_SKIP_DBG` | any value = on; default off | Prints to stderr, each frame, the display-list chain range and the moby skip ranges found when the mobys' draw packets are replaced by the host renderer. |
 | `RAC1_SKY_CHAIN` | any value = on; default off | Forces the sky to be drawn from the game's draw chain even when no modern or faithful world renderer is selected. |
 | `RAC1_SKY_ONLY` | any value = on; default off | Testing: the world draw chain is taken back after the sky, so only the sky is drawn. |
+| `RAC1_SPRITE_CLAMP` | 0 = off, 1 = on; default on with the modern renderer, off with the faithful one (RAC1_MRP=0) | The font glyphs' sampling kept inside their own cell of the font texture, so the neighbouring glyphs' edges no longer show as thin lines around the letters at high resolutions (issue #76). Set it to compare with the GS's own sampling. |
 | `RAC1_SND_TRACE` | any value = on; default off | Prints a trace of the sound-bank (989snd) events the game sends to the emulated IOP sound driver. |
 | `RAC1_STALL_LOG` | milliseconds as a number; default off (-1) | Logs every game step (a game frame or a blocking loop's frame) that takes longer than the given number of milliseconds, with the vsyncs it spanned. |
 | `RAC1_SUB_TRACE` | any value = on; default off | Prints, for each substituted draw range, how many substitute and real primitives the GS emulation kept or dropped. |

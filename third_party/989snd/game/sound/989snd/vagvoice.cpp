@@ -20,10 +20,7 @@ void VoiceManager::StartTone(std::shared_ptr<VagVoice> voice) {
   s16 right = AdjustVolToGroup(voice->basevol.right, voice->group);
 
   voice->SetVolume(left >> 1, right >> 1);
-
-  if ((voice->tone.Flags & 0x10) != 0x0) {
-    throw std::runtime_error("reverb only voice not handler");
-  }
+  voice->SetReverb((voice->tone.Flags & 0x11) != 0, (voice->tone.Flags & 0x10) != 0);
 
   std::pair<s16, s16> note = PitchBend(voice->tone, voice->current_pb, voice->current_pm,
                                        voice->start_note, voice->start_fine);
@@ -181,6 +178,9 @@ s16 VoiceManager::AdjustVolToGroup(s16 involume, int group) {
 }
 
 void VoiceManager::SetMasterVol(u8 group, s32 volume) {
+  if (mMasterVol[group] == volume) {
+    return;
+  }
   mMasterVol[group] = volume;
 
   for (auto& p : mVoices) {

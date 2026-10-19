@@ -69,6 +69,9 @@ struct MrpMoby {
     bool deferred = false;    // drawn in the deferred pass (drop shadow seen, 0x256810)
     bool shadow_mesh = false; // the record's +0x14 != 0 (moby +0x73): the flattened shadow mesh (0x256b50)
     bool animated = false;    // record +0x10 low byte != 0 (class +8 / +9)
+    // drawn from another view than the frame's (MrpFrame::cam_pos / view_rows: the first moby's): the boot's title main menu
+    // draws the scene's mobys from the title's camera, then its boxes from the menu's (0x276128, title_menu_draw 0x2196b8)
+    bool other_view = false;
     // world transform (moby +0x10 position, +0xc0 / +0xd0 / +0xe0 the rotation rows, +0x2c scale)
     float pos[3] = {};
     float scale = 0;

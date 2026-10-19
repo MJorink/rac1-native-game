@@ -140,6 +140,11 @@ float view_widen(int win_w, int win_h) {
     if (win_w <= 0 || win_h <= 0) return 1.0f;
     return std::max(1.0f, frame_aspect(win_w, win_h) / kAspect43);
 }
+// the field of view's scale applied now: 1 (the game's own) on the Vendor's screens (game mode 5): there the Vendor's monitors are
+// the scene's mobys, in its view, and the screens' 2D is placed on them in the game's own projection (their boxes projected by the
+// game, 4:3): another field of view put the monitors elsewhere than their 2D (issue #68). The widescreen's widening keeps them
+// together (the 2D centred on the 4:3 frame, the 3D only wider around it), so it stays
+float fov_scale_now() { return ee_read<int32_t>(OV(0x0015f5c4)) == 5 ? 1.0f : g_view_fov_scale; }
 }  // namespace
 
 // orig: (host) the frame's rectangle in the window by the view mode (debug menu, Options > Graphics)
@@ -222,7 +227,7 @@ float render_view_cull_widen() {
     const float cur = ee_read<float>(OV(0x0016caf0));
     if (!(cur > 0.0f) || g_last_w <= 0 || g_last_h <= 0) return 1.0f;
     if (fov_write_of(cur) != nullptr) return 1.0f;  // (the host's widened value is in place)
-    return std::max(1.0f, g_view_fov_scale * view_widen(g_last_w, g_last_h));
+    return std::max(1.0f, fov_scale_now() * view_widen(g_last_w, g_last_h));
 }
 
 // orig: (host) see render_view.h
@@ -230,12 +235,12 @@ float render_view_cull_widen_y() {
     const float cur = ee_read<float>(OV(0x0016caf0));
     if (!(cur > 0.0f) || g_last_w <= 0 || g_last_h <= 0) return 1.0f;
     if (fov_write_of(cur) != nullptr) return 1.0f;  // (the host's widened value is in place)
-    return std::max(1.0f, g_view_fov_scale);
+    return std::max(1.0f, fov_scale_now());
 }
 
 // orig: (host) see render_view.h
 void render_view_note_write(float written, float base) {
-    g_fov_writes[g_fov_next] = {written, base, base * g_view_fov_scale};
+    g_fov_writes[g_fov_next] = {written, base, base * fov_scale_now()};
     g_fov_next = (g_fov_next + 1) % 8;
     g_debug_fov_y_base = &fov_y_base;
 }
@@ -248,7 +253,7 @@ void render_view_projection(int win_w, int win_h) {
     if (!(cur > 0.0f)) return;
     const FovWrite* f = fov_write_of(cur);
     const float base = f != nullptr ? f->base : cur;
-    const float y_base = base * g_view_fov_scale;
+    const float y_base = base * fov_scale_now();
     const float want = y_base * view_widen(win_w, win_h);
     if (want == cur && (f != nullptr || want == base)) return;
     g_fov_writes[g_fov_next] = {want, base, y_base};

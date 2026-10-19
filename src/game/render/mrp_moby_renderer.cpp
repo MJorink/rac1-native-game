@@ -1159,6 +1159,9 @@ struct Key {
     bool deferred = false;  // the draw loop's second pass (the mobys whose drop shadow is seen): drawn after the shadows
     bool caster_only = false;  // a moby outside the view (the casters' cache): drawn into the shadow maps only
     uint32_t rt = 0;  // a moby drawn into a render target (MrpMoby::rt): its address; drawn there by mrp_moby_draw_target only
+    // the boot's title main menu's boxes (MrpMoby::other_view, Frame::title_menu): drawn in the game's own 4:3 projection (mode 1)
+    // over the scene's mobys in the world's, cut at the 4:3 frame; never casters
+    bool own_view = false;
     bool operator==(const Key&) const = default;
 };
 struct Batch {
@@ -1168,7 +1171,7 @@ struct Batch {
 
 struct Frame {
     bool active = false;
-    bool title = false, menu = false;
+    bool title = false, menu = false, title_menu = false;
     std::vector<PartGpu> parts;
     std::vector<uint32_t> cmds;  // 4 words each
     std::vector<DrawCmd> draws;
@@ -1190,6 +1193,7 @@ struct Frame {
     std::vector<MrpMat4> joints_extra;  // the cached casters' joints, after the frame's (mrp_scene's)
     std::vector<glm::vec3> part_pos;    // each part's world origin (a point light's cube takes the parts near it)
     std::vector<float> part_rad;        // a radius around it holding the part (its class's bounding sphere, generous)
+    std::vector<uint8_t> part_own;      // 1: a part of an own_view moby (Key::own_view: no world place, not a caster)
     // the view of each moby drawn into a render target (MrpMoby::rt_proj): B+292 x, B+296, B+291 x as for the frame's
     struct RtView {
         float proj = 0, offset[4] = {}, fog_min = 0;
@@ -1316,9 +1320,10 @@ void mrp_world_view_proj(float out[16]) { std::memcpy(out, glm::value_ptr(world_
 bool mrp_moby_ready() { return g_moby_renderer == MobyRenderer::kMrp && g_prog != 0 && g_level.loaded && g_level.id == moby_level_id(); }
 
 // orig: (host) see mrp_moby_renderer.h
-void mrp_moby_begin_frame(bool title, bool menu_mode) {
+void mrp_moby_begin_frame(bool title, bool menu_mode, bool title_menu) {
     g_frame.title = title;
     g_frame.menu = menu_mode;
+    g_frame.title_menu = title_menu && !menu_mode;
     g_frame.built = false;
     g_frame.active = false;
     g_prog_marks.clear();
@@ -1356,6 +1361,7 @@ void build_frame() {
     F.parts.clear();
     F.part_pos.clear();
     F.part_rad.clear();
+    F.part_own.clear();
     F.cmds.clear();
     F.draws.clear();
     F.batches.clear();
@@ -1397,8 +1403,9 @@ void build_frame() {
     }
     for (uint32_t mi = 0; mi < f.mobys.size(); ++mi) {
         const MrpMoby& m = f.mobys[mi];
+        const bool own_view = F.title_menu && m.other_view && !m.rt;
         CachedMoby* cm = nullptr;
-        if (caching) {
+        if (caching && !own_view) {
             cm = &g_mcache[m.moby];
             cm->class_id = m.class_id;
             std::memcpy(cm->pos, m.pos, sizeof cm->pos);
@@ -1529,6 +1536,7 @@ void build_frame() {
             F.parts.push_back(P);
             F.part_pos.push_back(glm::vec3(W[3]) / static_cast<float>(W[3].w != 0.0 ? W[3].w : 1.0));
             F.part_rad.push_back(part_radius(cg, W));
+            F.part_own.push_back(own_view ? 1 : 0);
             F.refs.push_back({mi, cg, pk, part_index, tint, test, alpha});
             CachedPart* cp = nullptr;
             if (cm != nullptr) {
@@ -1565,6 +1573,7 @@ void build_frame() {
                 key.zbuf = F.env_zbuf;
                 key.deferred = m.deferred;
                 key.rt = m.rt ? m.moby : 0u;
+                key.own_view = own_view;
                 Batch* b = F.batches.empty() ? nullptr : &F.batches.back();
                 if (b != nullptr && (pi.word & 1) != 0) {  // the white texture: any array, any sampler
                     key.bucket = b->key.bucket;
@@ -1626,6 +1635,7 @@ void build_frame() {
             F.parts.push_back(P);
             F.part_pos.push_back(glm::vec3(cp.W[3]) / static_cast<float>(cp.W[3].w != 0.0 ? cp.W[3].w : 1.0));
             F.part_rad.push_back(cp.rad);
+            F.part_own.push_back(0);
             for (const CachedRun& r : cp.runs) {
                 const uint32_t ci = static_cast<uint32_t>(F.cmds.size() / 4);
                 F.cmds.insert(F.cmds.end(), {part_index, r.word, r.layer, 0u});
@@ -1770,10 +1780,35 @@ void draw_batches(int win_w, int win_h, const gs::Viewport* vp, bool shadows = f
         glActiveTexture(GL_TEXTURE0);
         have = false;  // (the state of the batches is set again)
     };
+    // the boot's title main menu: its boxes' batches (Key::own_view) in the game's 4:3 projection onto the 4:3 frame (as the
+    // full-screen menu's mobys: mode 1, the frame's x scale, the GS depth clamped) and cut at that frame, the scene's in the world's
+    bool own_on = false;
+    auto own_view = [&](bool on) {
+        if (on == own_on) return;
+        own_on = on;
+        glUniform1i(g_loc.mode, on ? 1 : F.mode);
+        float fb_w = static_cast<float>(lhu(0x001518d0)), fb_h = static_cast<float>(lhu(0x001518d2));
+        if (fb_w <= 0.0f) fb_w = 512.0f;
+        if (fb_h <= 0.0f) fb_h = 416.0f;
+        const float xs = vp != nullptr ? vp->xscale : 1.0f;
+        glUniform4f(g_loc.frame, fb_w, fb_h, on ? xs : (vp != nullptr ? vp->xscale_3d : 1.0f), 0.0f);
+        if (on) mrp_lighting_bind_off(g_loc.sh);
+        else if (F.mode == 0) mrp_lighting_bind_receiver(g_loc.sh);
+        if (on || F.mode == 1) glEnable(GL_DEPTH_CLAMP);
+        else glDisable(GL_DEPTH_CLAMP);
+        if (on && vp != nullptr && xs < 1.0f) {
+            const int cw = static_cast<int>(static_cast<float>(vp->w) * xs);
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(vp->x + (vp->w - cw) / 2, vp->y, cw, vp->h);
+        } else if (!g_mrp_moby_keep_scissor) {
+            glDisable(GL_SCISSOR_TEST);
+        }
+    };
     for (const Batch& b : F.batches) {
         const Key& k = b.key;
         if (k.caster_only) continue;  // (the cached mobys outside the view: the shadow maps' only)
         if (k.rt != rt) continue;     // (a render target's mobys, drawn there)
+        if (rt == 0) own_view(k.own_view);
         if (!shadows_done && k.deferred) draw_shadows();
         {  // the batch's draw commands checked against the buffers they read: one outside them is refused (logged)
             const char* why = nullptr;
@@ -1842,6 +1877,7 @@ void draw_batches(int win_w, int win_h, const gs::Viewport* vp, bool shadows = f
         }
     }
     if (!shadows_done) draw_shadows();
+    own_view(false);
     glBindSampler(0, 0);
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     if (depth_clamp) glEnable(GL_DEPTH_CLAMP);
@@ -1879,6 +1915,7 @@ void draw_casters(const float* light_vp, const float* sphere, const float* withi
         part_vis.assign(nparts, 0);
         uint32_t any_vis = 0;
         for (size_t p = 0; p < nparts; ++p) {
+            if (p < F.part_own.size() && F.part_own[p] != 0) continue;
             const glm::vec3 pos = F.part_pos[p];
             if (sphere != nullptr) {
                 const glm::vec3 d = pos - c;
@@ -1940,7 +1977,7 @@ void draw_casters(const float* light_vp, const float* sphere, const float* withi
         const Key& k = b.key;
         const uint32_t kztst = gs::field(k.test, 17, 2);
         const bool zwrite = gs::field(k.test, 16, 1) != 0 && kztst != 1 && gs::field(k.zbuf, 32, 1) == 0;
-        if (!zwrite) continue;
+        if (!zwrite || k.own_view) continue;
         if (static_cast<uint64_t>(b.first) + b.count > F.draws.size()) continue;
         const uint32_t dfirst = filter ? ranges[bi].first : b.first, dcount = filter ? ranges[bi].second : b.count;
         if (dcount == 0) continue;
@@ -2226,6 +2263,7 @@ bool mrp_moby_caster_rect(const float* light_vp, float rect[4], const float* wit
     rect[2] = rect[3] = -1e30f;
     bool any = false;
     for (size_t i = 0; i < g_frame.part_pos.size(); ++i) {
+        if (i < g_frame.part_own.size() && g_frame.part_own[i] != 0) continue;
         if (within != nullptr && glm::length(g_frame.part_pos[i] - glm::vec3(within[0], within[1], within[2])) > within[3]) continue;
         any = true;
         const glm::vec4 q = vp * glm::vec4(g_frame.part_pos[i], 1.0f);
@@ -2243,7 +2281,8 @@ float mrp_moby_nearest_part(const float p[3]) {
     float best = 1e30f;
     if (!g_frame.active || !g_frame.built || g_frame.mode != 0) return best;
     const glm::vec3 c(p[0], p[1], p[2]);
-    for (const glm::vec3& q : g_frame.part_pos) best = std::min(best, glm::length(q - c));
+    for (size_t i = 0; i < g_frame.part_pos.size(); ++i)
+        if (i >= g_frame.part_own.size() || g_frame.part_own[i] == 0) best = std::min(best, glm::length(g_frame.part_pos[i] - c));
     return best;
 }
 

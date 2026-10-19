@@ -247,6 +247,7 @@ void title_draw() {
     world_pass(world_shrub_pass, 2);  // (front: 0x228b38)
     packet_mark(0x02040000);
     mrp_title_view_note();  // (host: the passes' view, before the menu's draw sets its own)
+    mrp_title_view_note_menu(lw(MODE) == 3);  // (host: the menu's mobys drawn in the game's 4:3 projection)
     if (lw(MODE) == 3) {
         title_menu_draw();
     } else if (g_moby_vu1_pass) {

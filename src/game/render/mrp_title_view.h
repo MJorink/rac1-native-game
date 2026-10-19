@@ -18,6 +18,12 @@ void mrp_title_view_note();
 // the note
 bool mrp_title_view_swap_in();
 void mrp_title_view_swap_out();
+// orig: (host) the boot's title draw (0x1eb410) of the last update drew its main menu (game mode 3: title_menu_draw 0x2196b8):
+// its mobys are then the menu's boxes, seen from the menu's camera and placed under the menu's 2D (their 4:3 screen boxes,
+// menu_box_project 0x299f40), so the host draws them in the game's own 4:3 projection, not the title scene's widened one
+// (set by title_draw each frame)
+void mrp_title_view_note_menu(bool menu);
+bool mrp_title_menu_drawn();
 
 }  // namespace rac1
 
