@@ -660,6 +660,10 @@ void point_shadows_pass() {
         nfade = 0;
     }
     int cube = 0;
+    glViewport(0, 0, kPtRes, kPtRes);
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
     for (int pi = 0; pi < npick; ++pi) {
         const int i = pick[pi];
         const glm::vec3 lp(g_sh.pt_pos[i]);
@@ -668,11 +672,25 @@ void point_shadows_pass() {
         const glm::mat4 proj = glm::perspective(glm::radians(90.0f), 1.0f, kPtNear, r);
         for (int f = 0; f < 6; ++f) {
             glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, g_sh.ptex, 0, 6 * cube + f);
-            glViewport(0, 0, kPtRes, kPtRes);
-            glDepthMask(GL_TRUE);
             glClear(GL_DEPTH_BUFFER_BIT);
-            glEnable(GL_DEPTH_TEST);
-            glDepthFunc(GL_LESS);
+            // cull faces whose 90-degree pyramid (apex lp, base corners at distance r) lies outside a camera frustum plane
+            const glm::vec3 right = glm::cross(dirs[f], ups[f]);
+            glm::vec4 c[5];
+            c[0] = g_sh.view_proj * glm::vec4(lp, 1.0f);
+            c[1] = g_sh.view_proj * glm::vec4(lp + r * (dirs[f] - right - ups[f]), 1.0f);
+            c[2] = g_sh.view_proj * glm::vec4(lp + r * (dirs[f] + right - ups[f]), 1.0f);
+            c[3] = g_sh.view_proj * glm::vec4(lp + r * (dirs[f] - right + ups[f]), 1.0f);
+            c[4] = g_sh.view_proj * glm::vec4(lp + r * (dirs[f] + right + ups[f]), 1.0f);
+            int out_l = 0, out_r = 0, out_b = 0, out_t = 0, out_n = 0, out_f = 0;
+            for (int v = 0; v < 5; ++v) {
+                out_l += c[v].x < -c[v].w ? 1 : 0;
+                out_r += c[v].x >  c[v].w ? 1 : 0;
+                out_b += c[v].y < -c[v].w ? 1 : 0;
+                out_t += c[v].y >  c[v].w ? 1 : 0;
+                out_n += c[v].z < -c[v].w ? 1 : 0;
+                out_f += c[v].z >  c[v].w ? 1 : 0;
+            }
+            if (out_l == 5 || out_r == 5 || out_b == 5 || out_t == 5 || out_n == 5 || out_f == 5) continue;
             const glm::mat4 vp = proj * glm::lookAt(lp, lp + dirs[f], ups[f]);
             if (g_sh.pt_slot[i] >= 0) mrp_world_draw_casters(glm::value_ptr(vp), 3 + g_sh.pt_slot[i]);
             mrp_moby_draw_casters(glm::value_ptr(vp), glm::value_ptr(g_sh.pt_pos[i]));
@@ -742,7 +760,7 @@ in vec2 vUv;
 uniform sampler2D uDepth;
 uniform mat4 uInvVP, uVP;
 uniform vec3 uCam;
-uniform vec4 uParam;  // radius (units), strength, bias, 0
+uniform vec4 uParam;  // radius (units), strength, bias, mode (1=SSAO, 2=SSAO+, 3=HBAO, 4=GTAO)
 out float FragAo;
 vec3 world(vec2 uv, float d) {
     vec4 p = uInvVP * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
@@ -751,35 +769,148 @@ vec3 world(vec2 uv, float d) {
 void main() {
     float d = texture(uDepth, vUv).r;
     vec3 P = world(vUv, d);
-    vec3 N = cross(dFdx(P), dFdy(P));
-    if (d >= 1.0 || dot(N, N) < 1e-12) { FragAo = 1.0; return; }
+    vec3 dPdx = dFdx(P), dPdy = dFdy(P);  // (before any return: derivatives in non-uniform control flow are undefined)
+    if (d >= 1.0) { FragAo = 1.0; return; }
+    int mode = int(uParam.w + 0.5);
+    vec3 N;
+    if (mode <= 1) {
+        N = cross(dPdx, dPdy);
+    } else {
+        vec2 texel = 1.0 / vec2(textureSize(uDepth, 0));
+        float dr = texture(uDepth, vUv + vec2(texel.x, 0.0)).r;
+        float dl = texture(uDepth, vUv - vec2(texel.x, 0.0)).r;
+        float du = texture(uDepth, vUv + vec2(0.0, texel.y)).r;
+        float dd = texture(uDepth, vUv - vec2(0.0, texel.y)).r;
+        vec3 dPx = (abs(dr - d) < abs(d - dl) && dr < 1.0) ? (world(vUv + vec2(texel.x, 0.0), dr) - P)
+                                                            : (dl < 1.0 ? (P - world(vUv - vec2(texel.x, 0.0), dl)) : dPdx);
+        vec3 dPy = (abs(du - d) < abs(d - dd) && du < 1.0) ? (world(vUv + vec2(0.0, texel.y), du) - P)
+                                                            : (dd < 1.0 ? (P - world(vUv - vec2(0.0, texel.y), dd)) : dPdy);
+        N = cross(dPx, dPy);
+    }
+    if (dot(N, N) < 1e-12) { FragAo = 1.0; return; }
     N = normalize(N);
-    if (dot(N, uCam - P) < 0.0) N = -N;
-    float a = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    vec3 V = uCam - P;
+    float vlen = length(V);
+    V /= max(vlen, 1e-5);
+    if (dot(N, V) < 0.0) N = -N;
+    float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    float noise2 = fract(52.9829189 * fract(dot(gl_FragCoord.xy + vec2(17.0, 31.0), vec2(0.06711056, 0.00583715))));
     vec3 t = normalize(abs(N.z) < 0.9 ? cross(N, vec3(0.0, 0.0, 1.0)) : cross(N, vec3(1.0, 0.0, 0.0)));
     vec3 b = cross(N, t);
-    vec3 T = t * cos(a) + b * sin(a), B = cross(N, T);
-    float occ = 0.0;
-    const int K = 12;
-    for (int i = 0; i < K; ++i) {
-        float fi = (float(i) + 0.5) / float(K);
-        float z = sqrt(1.0 - fi);                 // (cosine-weighted)
-        float r = sqrt(fi), ph = float(i) * 2.3999632;
-        vec3 h = T * (r * cos(ph)) + B * (r * sin(ph)) + N * z;
-        float s = mix(0.15, 1.0, fi * fi) * uParam.x;
-        vec3 S = P + N * uParam.z + h * s;
-        vec4 c = uVP * vec4(S, 1.0);
-        if (c.w <= 0.0) continue;
-        vec2 suv = c.xy / c.w * 0.5 + 0.5;
-        if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) continue;
-        float sd = texture(uDepth, suv).r;
-        float zs = c.z / c.w * 0.5 + 0.5;
-        if (sd < zs - 0.00002) {
-            float dist = length(world(suv, sd) - S);
-            occ += smoothstep(0.0, 1.0, uParam.x * 1.5 / max(dist, 1e-3) - 0.5);
+    float R = uParam.x, invR2 = 1.0 / max(R * R, 1e-4);
+
+    if (mode <= 2) {
+        float a = 6.2831853 * noise;
+        vec3 T = t * cos(a) + b * sin(a), B = cross(N, T);
+        float occ = 0.0;
+        const int K = 12;
+        for (int i = 0; i < K; ++i) {
+            float fi = (float(i) + 0.5) / float(K);
+            float z = sqrt(1.0 - fi);
+            float r = sqrt(fi), ph = float(i) * 2.3999632;
+            vec3 h = T * (r * cos(ph)) + B * (r * sin(ph)) + N * z;
+            float s = mix(0.15, 1.0, fi * fi) * R;
+            vec3 S = P + N * uParam.z + h * s;
+            vec4 c = uVP * vec4(S, 1.0);
+            if (c.w <= 0.0) continue;
+            vec2 suv = c.xy / c.w * 0.5 + 0.5;
+            if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) continue;
+            float sd = texture(uDepth, suv).r;
+            float zs = c.z / c.w * 0.5 + 0.5;
+            if (sd < zs - 0.00002) {
+                float dist = length(world(suv, sd) - S);
+                occ += smoothstep(0.0, 1.0, R * 1.5 / max(dist, 1e-3) - 0.5);
+            }
         }
+        FragAo = 1.0 - uParam.y * occ / float(K);
+        return;
     }
-    FragAo = 1.0 - uParam.y * occ / float(K);
+
+    if (mode == 3) {
+        // HBAO: 4 directions x 3 steps (12 taps), horizon angle sin(h) with quadratic distance attenuation
+        const int D = 4, S = 3;
+        float occ = 0.0;
+        for (int d_i = 0; d_i < D; ++d_i) {
+            float phi = (float(d_i) + noise) * (6.2831853 / float(D));
+            vec3 dir = t * cos(phi) + b * sin(phi);
+            float max_sin_h = 0.12;
+            float best_att = 0.0;
+            for (int s_i = 1; s_i <= S; ++s_i) {
+                float frac_r = (float(s_i) - 0.5 + 0.5 * noise2) / float(S);
+                vec3 Q = P + N * uParam.z + dir * (frac_r * R);
+                vec4 c = uVP * vec4(Q, 1.0);
+                if (c.w <= 0.0) continue;
+                vec2 suv = c.xy / c.w * 0.5 + 0.5;
+                if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) continue;
+                float sd = texture(uDepth, suv).r;
+                if (sd >= 1.0) continue;
+                vec3 H = world(suv, sd) - P;
+                float d2 = dot(H, H);
+                if (d2 < 1e-5 || d2 > R * R * 1.44) continue;
+                float sin_h = dot(H, N) * inversesqrt(d2);
+                if (sin_h > max_sin_h) {
+                    float att = clamp(1.0 - d2 * invR2, 0.0, 1.0);
+                    best_att += (sin_h - max_sin_h) * att;
+                    max_sin_h = sin_h;
+                }
+            }
+            occ += clamp(best_att, 0.0, 1.0);
+        }
+        FragAo = clamp(1.0 - uParam.y * 1.25 * (occ / float(D)), 0.0, 1.0);
+        return;
+    }
+
+    // GTAO (mode 4 & 5): 3 slice directions x 2 sides x 3 steps (18 taps), cosine-weighted horizon integral
+    const int D = 3, S = 3;
+    float vis = 0.0;
+    for (int d_i = 0; d_i < D; ++d_i) {
+        float phi = (float(d_i) + noise) * (3.14159265 / float(D));
+        vec3 dir = t * cos(phi) + b * sin(phi);
+        float h1 = -1.0, h2 = -1.0;
+        for (int s_i = 1; s_i <= S; ++s_i) {
+            float step_r = ((float(s_i) - 0.5 + 0.5 * noise2) / float(S)) * R;
+            vec4 cp = uVP * vec4(P + N * uParam.z + dir * step_r, 1.0);
+            if (cp.w > 0.0) {
+                vec2 uvp = cp.xy / cp.w * 0.5 + 0.5;
+                if (all(greaterThanEqual(uvp, vec2(0.0))) && all(lessThanEqual(uvp, vec2(1.0)))) {
+                    float sdp = texture(uDepth, uvp).r;
+                    if (sdp < 1.0) {
+                        vec3 Hp = world(uvp, sdp) - P;
+                        float d2 = dot(Hp, Hp);
+                        if (d2 > 1e-5) {
+                            float c_h = dot(Hp, N) * inversesqrt(d2);
+                            float falloff = clamp(1.0 - d2 * invR2, 0.0, 1.0);
+                            h1 = max(h1, mix(-1.0, c_h, falloff));
+                        }
+                    }
+                }
+            }
+            vec4 cn = uVP * vec4(P + N * uParam.z - dir * step_r, 1.0);
+            if (cn.w > 0.0) {
+                vec2 uvn = cn.xy / cn.w * 0.5 + 0.5;
+                if (all(greaterThanEqual(uvn, vec2(0.0))) && all(lessThanEqual(uvn, vec2(1.0)))) {
+                    float sdn = texture(uDepth, uvn).r;
+                    if (sdn < 1.0) {
+                        vec3 Hn = world(uvn, sdn) - P;
+                        float d2 = dot(Hn, Hn);
+                        if (d2 > 1e-5) {
+                            float c_h = dot(Hn, N) * inversesqrt(d2);
+                            float falloff = clamp(1.0 - d2 * invR2, 0.0, 1.0);
+                            h2 = max(h2, mix(-1.0, c_h, falloff));
+                        }
+                    }
+                }
+            }
+        }
+        float a1 = acos(clamp(h1, -1.0, 1.0));
+        float a2 = acos(clamp(h2, -1.0, 1.0));
+        float slice_vis = 0.5 * ((1.0 - cos(a1)) + (1.0 - cos(a2)));
+        vis += clamp(slice_vis, 0.0, 1.0);
+    }
+    vis /= float(D);
+    // Multi-bounce approximation (Jimenez et al. 2016)
+    float mb = vis / (vis * 0.6 + 0.4);
+    FragAo = clamp(mix(1.0, mix(vis, mb, 0.35), uParam.y * 1.15), 0.0, 1.0);
 }
 )";
 const char* kAoBlurFs = R"(#version 460 core
@@ -800,6 +931,29 @@ void main() {
             w += k;
         }
     float ao = w > 0.0 ? sum / w : 1.0;
+    FragColor = vec4(vec3(ao), 1.0);
+}
+)";
+const char* kAoBlurSepFs = R"(#version 460 core
+in vec2 vUv;
+uniform sampler2D uAo, uDepth;
+uniform vec2 uTexel;
+out vec4 FragColor;
+void main() {
+    float d0 = texture(uDepth, vUv).r;
+    if (d0 >= 1.0) { FragColor = vec4(1.0); return; }
+    const float gw[5] = float[5](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+    float sum = texture(uAo, vUv).r * gw[0], w = gw[0];
+    for (int i = 1; i <= 4; ++i) {
+        vec2 off = uTexel * float(i);
+        vec2 uv1 = vUv + off, uv2 = vUv - off;
+        float d1 = texture(uDepth, uv1).r, d2 = texture(uDepth, uv2).r;
+        float k1 = gw[i] * exp(-abs(d1 - d0) * 3500.0);
+        float k2 = gw[i] * exp(-abs(d2 - d0) * 3500.0);
+        sum += texture(uAo, uv1).r * k1 + texture(uAo, uv2).r * k2;
+        w += k1 + k2;
+    }
+    float ao = w > 1e-5 ? sum / w : 1.0;
     FragColor = vec4(vec3(ao), 1.0);
 }
 )";
@@ -830,13 +984,14 @@ GLuint ao_link(const char* fs) {
     return p;
 }
 struct Ao {
-    GLuint prog = 0, blur = 0, vao = 0;
-    GLuint dfbo = 0, dtex = 0, afbo = 0, atex = 0;
-    int w = 0, h = 0;
+    GLuint prog = 0, blur = 0, blur_sep = 0, vao = 0;
+    GLuint dfbo = 0, dtex = 0, afbo = 0, atex = 0, bfbo = 0, btex = 0;
+    int w = 0, h = 0, aw = 0, ah = 0;
     GLint last_fb = -1;
     GLenum dfmt = 0;
     GLint u_depth = -1, u_inv_vp = -1, u_vp = -1, u_cam = -1, u_param = -1;
     GLint u_b_depth = -1, u_b_ao = -1, u_b_texel = -1;
+    GLint u_bs_depth = -1, u_bs_ao = -1, u_bs_texel = -1;
 } g_ao_s;
 
 // ---- the view covered from the sun -----------------------------------------------------------------------------------
@@ -1054,11 +1209,9 @@ void cover_probe(GLint fb, const int vp[4]) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, P.ofbo);
     glReadBuffer(GL_COLOR_ATTACHMENT0);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, P.pbo[P.next]);
-    GLint align = 4;
-    glGetIntegerv(GL_PACK_ALIGNMENT, &align);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, kProbeW, kProbeH, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glPixelStorei(GL_PACK_ALIGNMENT, align);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     P.filled[P.next] = true;
     P.next ^= 1;
@@ -1073,176 +1226,198 @@ void mrp_lighting_ao_pass() {
     if (!g_sh.on) return;
     int vp[4];
     if (!mrp_world_last_viewport(vp)) return;
-    {  // the view covered from the sun (the samples' pass, its own state restored)
-        GLint fb = 0, rfb = 0, prev_prog = 0, prev_vao = 0, prev_vp[4] = {}, prev_active = 0, prev_t0 = 0, prev_t1 = 0, prev_rb = 0;
-        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &fb);
-        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
-        glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
-        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
-        glGetIntegerv(GL_VIEWPORT, prev_vp);
-        glGetIntegerv(GL_ACTIVE_TEXTURE, &prev_active);
-        glGetIntegerv(GL_READ_BUFFER, &prev_rb);
-        glActiveTexture(GL_TEXTURE0 + 28);
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_t0);
-        glActiveTexture(GL_TEXTURE0 + kUnit);
-        glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &prev_t1);
-        const GLboolean blend = glIsEnabled(GL_BLEND), depth = glIsEnabled(GL_DEPTH_TEST), scissor = glIsEnabled(GL_SCISSOR_TEST), cull = glIsEnabled(GL_CULL_FACE);
-        GLboolean cmask[4];
-        glGetBooleanv(GL_COLOR_WRITEMASK, cmask);
-        glDisable(GL_BLEND);
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_SCISSOR_TEST);
-        glDisable(GL_CULL_FACE);
-        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-        cover_probe(fb, vp);
-        glColorMask(cmask[0], cmask[1], cmask[2], cmask[3]);
-        if (blend) glEnable(GL_BLEND);
-        if (depth) glEnable(GL_DEPTH_TEST);
-        if (scissor) glEnable(GL_SCISSOR_TEST);
-        if (cull) glEnable(GL_CULL_FACE);
-        glActiveTexture(GL_TEXTURE0 + 28);
-        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev_t0));
-        glActiveTexture(GL_TEXTURE0 + kUnit);
-        glBindTexture(GL_TEXTURE_2D_ARRAY, static_cast<GLuint>(prev_t1));
-        glActiveTexture(static_cast<GLenum>(prev_active));
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(fb));
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(rfb));
-        glReadBuffer(static_cast<GLenum>(prev_rb));
-        glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
-        glUseProgram(static_cast<GLuint>(prev_prog));
-        glBindVertexArray(static_cast<GLuint>(prev_vao));
-    }
-    if (g_ao == 0) return;
-    Ao& A = g_ao_s;
-    GLint fb = 0, rfb = 0, prev_prog = 0, prev_vao = 0, prev_vp[4] = {}, prev_tex = 0, prev_active = 0;
+    GLint fb = 0, rfb = 0, prev_prog = 0, prev_vao = 0, prev_vp[4] = {}, prev_active = 0, prev_t0 = 0, prev_t1 = 0, prev_rb = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &fb);
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
     glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
     glGetIntegerv(GL_VIEWPORT, prev_vp);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &prev_active);
-    const int w = vp[2], h = vp[3];
-    if (A.prog == 0) {
-        A.prog = ao_link(kAoFs);
-        A.blur = ao_link(kAoBlurFs);
-        A.u_depth = glGetUniformLocation(A.prog, "uDepth");
-        A.u_inv_vp = glGetUniformLocation(A.prog, "uInvVP");
-        A.u_vp = glGetUniformLocation(A.prog, "uVP");
-        A.u_cam = glGetUniformLocation(A.prog, "uCam");
-        A.u_param = glGetUniformLocation(A.prog, "uParam");
-        A.u_b_depth = glGetUniformLocation(A.blur, "uDepth");
-        A.u_b_ao = glGetUniformLocation(A.blur, "uAo");
-        A.u_b_texel = glGetUniformLocation(A.blur, "uTexel");
-        glGenVertexArrays(1, &A.vao);
-        glGenFramebuffers(1, &A.dfbo);
-        glGenFramebuffers(1, &A.afbo);
-        glGenTextures(1, &A.dtex);
-        glGenTextures(1, &A.atex);
-    }
-    GLenum fmt = A.dfmt;
-    if (fb != A.last_fb || fmt == 0) {
-        // the depth format of the framebuffer drawn into (the blit wants the same)
-        GLint dbits = 24, sbits = 8, dtype = GL_UNSIGNED_NORMALIZED;
-        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(fb));
-        const GLenum datt = fb == 0 ? GL_DEPTH : GL_DEPTH_ATTACHMENT, satt = fb == 0 ? GL_STENCIL : GL_STENCIL_ATTACHMENT;
-        glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, datt, GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &dbits);
-        glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, datt, GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &dtype);
-        glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, satt, GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, &sbits);
-        while (glGetError() != GL_NO_ERROR) {}
-        fmt = dtype == GL_FLOAT ? (sbits > 0 ? GL_DEPTH32F_STENCIL8 : GL_DEPTH_COMPONENT32F)
-                                : (sbits > 0 ? GL_DEPTH24_STENCIL8 : (dbits >= 32 ? GL_DEPTH_COMPONENT32 : dbits >= 24 ? GL_DEPTH_COMPONENT24 : GL_DEPTH_COMPONENT16));
-        A.last_fb = fb;
-    }
-    if (A.w != w || A.h != h || A.dfmt != fmt) {
-        A.w = w;
-        A.h = h;
-        A.dfmt = fmt;
-        glBindTexture(GL_TEXTURE_2D, A.dtex);
-        const bool st = fmt == GL_DEPTH24_STENCIL8 || fmt == GL_DEPTH32F_STENCIL8;
-        glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(fmt), w, h, 0, st ? GL_DEPTH_STENCIL : GL_DEPTH_COMPONENT,
-                     fmt == GL_DEPTH24_STENCIL8 ? GL_UNSIGNED_INT_24_8 : fmt == GL_DEPTH32F_STENCIL8 ? GL_FLOAT_32_UNSIGNED_INT_24_8_REV : GL_FLOAT, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glBindFramebuffer(GL_FRAMEBUFFER, A.dfbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, st ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, A.dtex, 0);
-        glDrawBuffer(GL_NONE);
-        glReadBuffer(GL_NONE);
-        glBindTexture(GL_TEXTURE_2D, A.atex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glBindFramebuffer(GL_FRAMEBUFFER, A.afbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, A.atex, 0);
-    }
-    // the depth: the 3D's viewport of the framebuffer into the texture
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(fb));
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, A.dfbo);
-    const bool st = fmt == GL_DEPTH24_STENCIL8 || fmt == GL_DEPTH32F_STENCIL8;
-    glBlitFramebuffer(vp[0], vp[1], vp[0] + w, vp[1] + h, 0, 0, w, h, GL_DEPTH_BUFFER_BIT | (st ? GL_STENCIL_BUFFER_BIT : 0), GL_NEAREST);
+    glGetIntegerv(GL_READ_BUFFER, &prev_rb);
+    glActiveTexture(GL_TEXTURE0 + 28);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_t0);
+    glActiveTexture(GL_TEXTURE0 + kUnit);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &prev_t1);
     const GLboolean blend = glIsEnabled(GL_BLEND), depth = glIsEnabled(GL_DEPTH_TEST), scissor = glIsEnabled(GL_SCISSOR_TEST), cull = glIsEnabled(GL_CULL_FACE);
-    GLint bsrc = 0, bdst = 0, bsrca = 0, bdsta = 0;
-    glGetIntegerv(GL_BLEND_SRC_RGB, &bsrc);
-    glGetIntegerv(GL_BLEND_DST_RGB, &bdst);
-    glGetIntegerv(GL_BLEND_SRC_ALPHA, &bsrca);
-    glGetIntegerv(GL_BLEND_DST_ALPHA, &bdsta);
-    GLboolean cmask[4], dmask = GL_TRUE;
+    GLboolean cmask[4];
     glGetBooleanv(GL_COLOR_WRITEMASK, cmask);
-    glGetBooleanv(GL_DEPTH_WRITEMASK, &dmask);
+    glDisable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_CULL_FACE);
-    glDisable(GL_BLEND);
-    glDepthMask(GL_FALSE);
-    glBindVertexArray(A.vao);
-    // the occlusion
-    float vpf[16];
-    mrp_world_view_proj(vpf);
-    const glm::mat4 VP = glm::make_mat4(vpf), IVP = glm::inverse(VP);
-    static const float radius = static_cast<float>(env_int("RAC1_AO_RADIUS", 90)) / 100.0f, strength = static_cast<float>(env_int("RAC1_AO_STRENGTH", 70)) / 100.0f;  // (testing)
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, A.afbo);
-    glViewport(0, 0, w, h);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glUseProgram(A.prog);
-    glActiveTexture(GL_TEXTURE0);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex);
-    glBindTexture(GL_TEXTURE_2D, A.dtex);
-    glUniform1i(A.u_depth, 0);
-    glUniformMatrix4fv(A.u_inv_vp, 1, GL_FALSE, glm::value_ptr(IVP));
-    glUniformMatrix4fv(A.u_vp, 1, GL_FALSE, glm::value_ptr(VP));
-    glUniform3f(A.u_cam, g_sh.cam.x, g_sh.cam.y, g_sh.cam.z);
-    glUniform4f(A.u_param, radius, strength, 0.02f, 0.0f);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-    // blurred, multiplied into the colour
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(fb));
-    glViewport(vp[0], vp[1], w, h);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_DST_COLOR, GL_ZERO);
-    glUseProgram(A.blur);
-    glActiveTexture(GL_TEXTURE1);
-    GLint prev_tex1 = 0;
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex1);
-    glBindTexture(GL_TEXTURE_2D, A.atex);
-    glUniform1i(A.u_b_depth, 0);
-    glUniform1i(A.u_b_ao, 1);
-    glUniform2f(A.u_b_texel, 1.0f / static_cast<float>(w), 1.0f / static_cast<float>(h));
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev_tex1));
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev_tex));
-    glActiveTexture(static_cast<GLenum>(prev_active));
-    // the state as it was
+    cover_probe(fb, vp);
+    glActiveTexture(GL_TEXTURE0 + 28);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev_t0));
+    glActiveTexture(GL_TEXTURE0 + kUnit);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, static_cast<GLuint>(prev_t1));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(rfb));  // (the read buffer is the bound read framebuffer's: rfb's, not the probe's)
+    glReadBuffer(static_cast<GLenum>(prev_rb));
+
+    if (g_ao != 0) {
+        Ao& A = g_ao_s;
+        const int w = vp[2], h = vp[3];
+        const bool half_res = (g_ao == 5);
+        const int aw = half_res ? std::max(1, w / 2) : w;
+        const int ah = half_res ? std::max(1, h / 2) : h;
+        if (A.prog == 0) {
+            A.prog = ao_link(kAoFs);
+            A.blur = ao_link(kAoBlurFs);
+            A.blur_sep = ao_link(kAoBlurSepFs);
+            A.u_depth = glGetUniformLocation(A.prog, "uDepth");
+            A.u_inv_vp = glGetUniformLocation(A.prog, "uInvVP");
+            A.u_vp = glGetUniformLocation(A.prog, "uVP");
+            A.u_cam = glGetUniformLocation(A.prog, "uCam");
+            A.u_param = glGetUniformLocation(A.prog, "uParam");
+            A.u_b_depth = glGetUniformLocation(A.blur, "uDepth");
+            A.u_b_ao = glGetUniformLocation(A.blur, "uAo");
+            A.u_b_texel = glGetUniformLocation(A.blur, "uTexel");
+            A.u_bs_depth = glGetUniformLocation(A.blur_sep, "uDepth");
+            A.u_bs_ao = glGetUniformLocation(A.blur_sep, "uAo");
+            A.u_bs_texel = glGetUniformLocation(A.blur_sep, "uTexel");
+            glGenVertexArrays(1, &A.vao);
+            glGenFramebuffers(1, &A.dfbo);
+            glGenFramebuffers(1, &A.afbo);
+            glGenFramebuffers(1, &A.bfbo);
+            glGenTextures(1, &A.dtex);
+            glGenTextures(1, &A.atex);
+            glGenTextures(1, &A.btex);
+        }
+        GLenum fmt = A.dfmt;
+        if (fb != A.last_fb || fmt == 0) {
+            // the depth format of the framebuffer drawn into (the blit wants the same)
+            GLint dbits = 24, sbits = 8, dtype = GL_UNSIGNED_NORMALIZED;
+            glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(fb));
+            const GLenum datt = fb == 0 ? GL_DEPTH : GL_DEPTH_ATTACHMENT, satt = fb == 0 ? GL_STENCIL : GL_STENCIL_ATTACHMENT;
+            glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, datt, GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &dbits);
+            glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, datt, GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &dtype);
+            glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, satt, GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, &sbits);
+            while (glGetError() != GL_NO_ERROR) {}
+            fmt = dtype == GL_FLOAT ? (sbits > 0 ? GL_DEPTH32F_STENCIL8 : GL_DEPTH_COMPONENT32F)
+                                    : (sbits > 0 ? GL_DEPTH24_STENCIL8 : (dbits >= 32 ? GL_DEPTH_COMPONENT32 : dbits >= 24 ? GL_DEPTH_COMPONENT24 : GL_DEPTH_COMPONENT16));
+            A.last_fb = fb;
+        }
+        if (A.w != w || A.h != h || A.aw != aw || A.ah != ah || A.dfmt != fmt) {
+            A.w = w;
+            A.h = h;
+            A.aw = aw;
+            A.ah = ah;
+            A.dfmt = fmt;
+            glBindTexture(GL_TEXTURE_2D, A.dtex);
+            const bool st = fmt == GL_DEPTH24_STENCIL8 || fmt == GL_DEPTH32F_STENCIL8;
+            glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(fmt), w, h, 0, st ? GL_DEPTH_STENCIL : GL_DEPTH_COMPONENT,
+                         fmt == GL_DEPTH24_STENCIL8 ? GL_UNSIGNED_INT_24_8 : fmt == GL_DEPTH32F_STENCIL8 ? GL_FLOAT_32_UNSIGNED_INT_24_8_REV : GL_FLOAT, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glBindFramebuffer(GL_FRAMEBUFFER, A.dfbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, st ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, A.dtex, 0);
+            glDrawBuffer(GL_NONE);
+            glReadBuffer(GL_NONE);
+            glBindTexture(GL_TEXTURE_2D, A.atex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, aw, ah, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, half_res ? GL_LINEAR : GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, half_res ? GL_LINEAR : GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glBindFramebuffer(GL_FRAMEBUFFER, A.afbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, A.atex, 0);
+            glBindTexture(GL_TEXTURE_2D, A.btex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glBindFramebuffer(GL_FRAMEBUFFER, A.bfbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, A.btex, 0);
+        }
+        // the depth: the 3D's viewport of the framebuffer into the texture
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(fb));
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, A.dfbo);
+        const bool st = fmt == GL_DEPTH24_STENCIL8 || fmt == GL_DEPTH32F_STENCIL8;
+        glBlitFramebuffer(vp[0], vp[1], vp[0] + w, vp[1] + h, 0, 0, w, h, GL_DEPTH_BUFFER_BIT | (st ? GL_STENCIL_BUFFER_BIT : 0), GL_NEAREST);
+        GLint bsrc = 0, bdst = 0, bsrca = 0, bdsta = 0, prev_tex = 0, prev_tex1 = 0;
+        glGetIntegerv(GL_BLEND_SRC_RGB, &bsrc);
+        glGetIntegerv(GL_BLEND_DST_RGB, &bdst);
+        glGetIntegerv(GL_BLEND_SRC_ALPHA, &bsrca);
+        glGetIntegerv(GL_BLEND_DST_ALPHA, &bdsta);
+        GLboolean dmask = GL_TRUE;
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &dmask);
+        glDepthMask(GL_FALSE);
+        glBindVertexArray(A.vao);
+        // the occlusion
+        float vpf[16];
+        mrp_world_view_proj(vpf);
+        const glm::mat4 VP = glm::make_mat4(vpf), IVP = glm::inverse(VP);
+        static const float radius = static_cast<float>(env_int("RAC1_AO_RADIUS", 90)) / 100.0f, strength = static_cast<float>(env_int("RAC1_AO_STRENGTH", 70)) / 100.0f;  // (testing)
+        const int shader_mode = (g_ao >= 5) ? 4 : g_ao;
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, A.afbo);
+        glViewport(0, 0, aw, ah);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glUseProgram(A.prog);
+        glActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex);
+        glBindTexture(GL_TEXTURE_2D, A.dtex);
+        glUniform1i(A.u_depth, 0);
+        glUniformMatrix4fv(A.u_inv_vp, 1, GL_FALSE, glm::value_ptr(IVP));
+        glUniformMatrix4fv(A.u_vp, 1, GL_FALSE, glm::value_ptr(VP));
+        glUniform3f(A.u_cam, g_sh.cam.x, g_sh.cam.y, g_sh.cam.z);
+        glUniform4f(A.u_param, radius, strength, 0.02f, static_cast<float>(shader_mode));
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+
+        glActiveTexture(GL_TEXTURE1);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex1);
+        if (g_ao == 1) {
+            // original SSAO: 5x5 box depth-threshold blur multiplied into the colour
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(fb));
+            glViewport(vp[0], vp[1], w, h);
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_DST_COLOR, GL_ZERO);
+            glUseProgram(A.blur);
+            glBindTexture(GL_TEXTURE_2D, A.atex);
+            glUniform1i(A.u_b_depth, 0);
+            glUniform1i(A.u_b_ao, 1);
+            glUniform2f(A.u_b_texel, 1.0f / static_cast<float>(w), 1.0f / static_cast<float>(h));
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        } else {
+            // SSAO+ / HBAO / GTAO / GTAO 1/2: 9-tap separable bilateral depth-weighted blur (horizontal -> btex, vertical -> fb)
+            glUseProgram(A.blur_sep);
+            glUniform1i(A.u_bs_depth, 0);
+            glUniform1i(A.u_bs_ao, 1);
+            // Pass 1: horizontal blur (also upsamples half-res atex to full-res btex via full-res depth guidance)
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, A.bfbo);
+            glViewport(0, 0, w, h);
+            glColorMask(GL_TRUE, GL_FALSE, GL_FALSE, GL_FALSE);
+            glDisable(GL_BLEND);
+            glBindTexture(GL_TEXTURE_2D, A.atex);
+            glUniform2f(A.u_bs_texel, 1.0f / static_cast<float>(aw), 0.0f);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            // Pass 2: vertical blur multiplied into the colour
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(fb));
+            glViewport(vp[0], vp[1], w, h);
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_DST_COLOR, GL_ZERO);
+            glBindTexture(GL_TEXTURE_2D, A.btex);
+            glUniform2f(A.u_bs_texel, 0.0f, 1.0f / static_cast<float>(h));
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev_tex1));
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev_tex));
+        glDepthMask(dmask);
+        glBlendFuncSeparate(static_cast<GLenum>(bsrc), static_cast<GLenum>(bdst), static_cast<GLenum>(bsrca), static_cast<GLenum>(bdsta));
+    }
+
     glColorMask(cmask[0], cmask[1], cmask[2], cmask[3]);
-    glDepthMask(dmask);
-    glBlendFuncSeparate(static_cast<GLenum>(bsrc), static_cast<GLenum>(bdst), static_cast<GLenum>(bsrca), static_cast<GLenum>(bdsta));
-    if (!blend) glDisable(GL_BLEND);
+    if (blend) glEnable(GL_BLEND);
+    else glDisable(GL_BLEND);
     if (depth) glEnable(GL_DEPTH_TEST);
     if (scissor) glEnable(GL_SCISSOR_TEST);
     if (cull) glEnable(GL_CULL_FACE);
+    glActiveTexture(static_cast<GLenum>(prev_active));
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(fb));
     glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(rfb));
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
@@ -1391,6 +1566,7 @@ bool mrp_lighting_cull_params(float sun[3], float splits[3], float* back, float*
 void mrp_lighting_shadow_pass() {
     g_sh.on = false;
     if (g_modern_shadows == 0 || !mrp_world_active() || !mrp_moby_active() || g_mrp_world_projection != 0) return;
+    ++g_sh.frame;
     static bool splits_read = false;
     if (!splits_read) {
         read_splits();
@@ -1521,6 +1697,11 @@ void mrp_lighting_shadow_pass() {
                 if ((skip & 1) == 0) mrp_world_draw_casters(glm::value_ptr(g_sh.casc[k].vp), k);
                 glDisable(GL_DEPTH_CLAMP);
                 ++g_sh.refreshes;
+            } else if (k == 2 && (g_sh.frame & 1u) != 0) {
+                // Far cascade (75..260 m): reuse last frame's moby shadows on odd frames when the static cache did not move
+                ++g_sh.frames_cached;
+                if (prof) glEndQuery(GL_TIME_ELAPSED);
+                continue;
             }
             ++g_sh.frames_cached;
             glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, g_sh.tex, 0, k);

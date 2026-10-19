@@ -53,7 +53,7 @@ void draw(const Gs& gs, int win_w, int win_h, float fb_w, float fb_h, const Dept
 
 uint32_t field(uint64_t v, int lo, int n);
 uint32_t texture_for(const Gs& gs, uint64_t tex0, uint64_t texa, const TexImage* img);
-void blend_state(const DrawState& st);
+void blend_state(const DrawState& st, bool to_rt = false);
 
 }  // namespace rac1::gs
 

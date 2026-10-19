@@ -219,6 +219,9 @@ private:
     uint64_t skipped_tags_ = 0;
     uint32_t scr_bp_ = 0, scr_bw_ = 0, scr_h_ = 0;  // set_screen_area
     long scr_prim_ = -1;                            // the type-7 primitive whose picture is still to read
+    std::shared_ptr<const TexImage> scr_snap_;
+    uint64_t scr_seq_ = 0;
+    uint32_t scr_snap_bp_ = ~0u, scr_snap_bw_ = 0, scr_snap_h_ = 0;
     void screen_transfer(uint32_t dbp);
     void screen_picture();
     std::vector<FxRange> fx_ranges_;  // (sorted by sub then first)
