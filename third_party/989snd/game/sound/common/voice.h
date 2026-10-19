@@ -55,6 +55,19 @@ class Voice {
 
   void SetVolumeR(u16 vol) { mVolume.right.Set(vol); }
 
+  void SetNoise(bool noise, u8 clock = 0) {
+    mNoise = noise;
+    mNoiseClock = clock & 0x3F;
+  }
+
+  void SetReverb(bool reverb, bool reverbOnly = false) {
+    mReverb = reverb;
+    mReverbOnly = reverbOnly;
+  }
+
+  [[nodiscard]] bool IsReverb() const { return mReverb; }
+  [[nodiscard]] bool IsReverbOnly() const { return mReverbOnly; }
+
   s16 GetEnvx() { return mADSR.Level(); }
 
   void SetSample(u16* sample) {
@@ -85,10 +98,16 @@ class Voice {
 
   AllocationType mAlloc;
   bool mNoise{false};
+  u8 mNoiseClock{0};
+  u16 mNoiseLevel{0x4D75};
+  s32 mNoiseCount{0};
+  bool mReverb{false};
+  bool mReverbOnly{false};
   bool mENDX{false};
 
   void DecodeSamples();
   void UpdateBlockHeader();
+  s16 StepNoise();
 
   fifo<s16, 0x20> mDecodeBuf{};
   s16 mDecodeHist1{0};

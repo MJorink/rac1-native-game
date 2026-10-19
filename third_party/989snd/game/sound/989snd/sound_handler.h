@@ -24,6 +24,9 @@ class SoundHandler {
   virtual u8 Group() = 0;
   virtual void Stop() = 0;
   virtual void SetVolPan(s32 vol, s32 pan) = 0;
+  virtual void AutoPan(s32 pan, s32 /*dir*/, s32 /*delta_time*/, s32 /*mode*/) {
+    SetVolPan(VOLUME_DONT_CHANGE, pan);
+  }
   virtual void SetPMod(s32 mod) = 0;
   virtual void SetPBend(s32 /*mod*/){};
   virtual void SetRegister(u8 /*reg*/, u8 /*value*/) {}

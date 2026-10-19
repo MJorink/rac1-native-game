@@ -84,6 +84,10 @@ BlockSoundHandler::BlockSoundHandler(SoundBank& bank,
   m_app_pan = pan;
   m_app_pb = pitch_bend;
   m_app_pm = pitch_mod;
+  m_autopan_target = pan;
+  m_autopan_pos = pan << 16;
+  m_autopan_step = 0;
+  m_autopan_ticks = 0;
 
   m_lfo_volume = 0;
   m_lfo_pan = 0;
@@ -119,6 +123,24 @@ BlockSoundHandler::~BlockSoundHandler() {
 
 bool BlockSoundHandler::Tick() {
   m_voices.remove_if([](std::weak_ptr<BlockSoundVoice>& p) { return p.expired(); });
+
+  if (!m_paused) {
+    if (m_autopan_ticks > 0) {
+      m_autopan_ticks--;
+      s32 next_pan = m_autopan_target;
+      if (m_autopan_ticks > 0) {
+        m_autopan_pos += m_autopan_step;
+        next_pan = m_autopan_pos >> 16;
+        while (next_pan >= 360)
+          next_pan -= 360;
+        while (next_pan < 0)
+          next_pan += 360;
+      }
+      if (next_pan != m_app_pan) {
+        ApplyVolPan(VOLUME_DONT_CHANGE, next_pan, false);
+      }
+    }
+  }
 
   for (auto& lfo : m_lfo) {
     lfo.Tick();
@@ -203,19 +225,19 @@ void BlockSoundHandler::Stop() {
   }
 }
 
-void BlockSoundHandler::SetVolPan(s32 vol, s32 pan) {
-  if (vol >= 0) {
-    if (vol != VOLUME_DONT_CHANGE) {
-      m_app_volume = vol;
-    }
-  } else {
-    m_app_volume = -1024 * vol / 127;
+void BlockSoundHandler::ApplyVolPan(s32 vol, s32 pan, bool cancel_autopan) {
+  if (vol != VOLUME_DONT_CHANGE) {
+    m_app_volume = (vol >= 0) ? vol : (-1024 * vol / 127);
   }
 
   if (pan == PAN_RESET) {
     m_app_pan = m_sfx->Pan;
+    if (cancel_autopan)
+      m_autopan_ticks = 0;
   } else if (pan != PAN_DONT_CHANGE) {
     m_app_pan = pan;
+    if (cancel_autopan)
+      m_autopan_ticks = 0;
   }
 
   s32 new_vol = ((m_app_volume * m_orig_volume) >> 10) + m_lfo_volume;
@@ -233,8 +255,10 @@ void BlockSoundHandler::SetVolPan(s32 vol, s32 pan) {
     m_cur_volume = new_vol;
     m_cur_pan = new_pan;
 
-    for (auto& c : m_children) {
-      c->SetVolPan(m_app_volume * m_orig_volume / 127, pan);
+    if (cancel_autopan) {
+      for (auto& c : m_children) {
+        c->SetVolPan(m_app_volume * m_orig_volume / 127, pan);
+      }
     }
 
     for (auto& p : m_voices) {
@@ -244,12 +268,73 @@ void BlockSoundHandler::SetVolPan(s32 vol, s32 pan) {
       }
 
       auto volume = m_vm.MakeVolume(127, 0, m_cur_volume, m_cur_pan, voice->g_vol, voice->g_pan);
+      voice->basevol = volume;
       auto left = m_vm.AdjustVolToGroup(volume.left, m_group);
       auto right = m_vm.AdjustVolToGroup(volume.right, m_group);
 
       voice->SetVolume(left >> 1, right >> 1);
     }
   }
+}
+
+void BlockSoundHandler::SetVolPan(s32 vol, s32 pan) {
+  ApplyVolPan(vol, pan, true);
+}
+
+void BlockSoundHandler::AutoPan(s32 pan, s32 dir, s32 delta_time, s32 mode) {
+  if (pan == PAN_RESET) {
+    pan = m_sfx->Pan;
+  } else if (pan == PAN_DONT_CHANGE) {
+    return;
+  }
+  while (pan >= 360) {
+    pan -= 360;
+  }
+  while (pan < 0) {
+    pan += 360;
+  }
+
+  for (auto& c : m_children) {
+    c->AutoPan(pan, dir, delta_time, mode);
+  }
+
+  s32 cur = m_app_pan;
+  while (cur >= 360) {
+    cur -= 360;
+  }
+  while (cur < 0) {
+    cur += 360;
+  }
+
+  s32 diff = pan - cur;
+  bool shortest = (dir == 0);
+  if (shortest) {
+    dir = 1;
+  }
+  if (dir > 0 && diff < 0) {
+    diff += 360;
+  }
+  if (dir < 0 && diff > 0) {
+    diff -= 360;
+  }
+  if (shortest && std::abs(diff) >= 181) {
+    diff -= 360;
+  }
+
+  s32 ticks = delta_time;
+  if (mode == 4) {
+    ticks = (delta_time * std::abs(diff)) / 180;
+  }
+  if (diff == 0 || ticks <= 0) {
+    m_autopan_ticks = 0;
+    ApplyVolPan(VOLUME_DONT_CHANGE, pan, false);
+    return;
+  }
+
+  m_autopan_target = pan;
+  m_autopan_pos = cur << 16;
+  m_autopan_step = (diff << 16) / ticks;
+  m_autopan_ticks = ticks;
 }
 
 void BlockSoundHandler::UpdatePitch() {

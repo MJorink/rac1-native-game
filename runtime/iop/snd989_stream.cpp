@@ -359,7 +359,9 @@ void snd989_movie_gain(float& left, float& right) {
 void snd989_stream_master_volume(Snd989Streams* io, uint32_t group, int32_t vol) {
     Use use(io);
     if (group >= st().master.size()) return;
-    st().master[group] = vol < 0 ? 0 : (vol > 0x400 ? 0x400 : vol);
+    const int32_t clamped = vol < 0 ? 0 : (vol > 0x400 ? 0x400 : vol);
+    if (st().master[group] == clamped) return;
+    st().master[group] = clamped;
     for (Stream& s : st().streams)
         if (s.handle != 0 && s.group == static_cast<int32_t>(group)) voice_apply(s);
 }

@@ -57,9 +57,13 @@ class Player {
   void PauseAllSoundsInGroup(u8 group);
   void ContinueAllSoundsInGroup(u8 group);
   void SetSoundVolPan(s32 sound_handle, s32 vol, s32 pan);
+  void AutoPan(s32 sound_handle, s32 pan, s32 dir, s32 delta_time, s32 mode);
   void SubmitVoice(std::shared_ptr<Voice>& voice) { mSynth.AddVoice(voice); };
   void SetSoundPmod(s32 sound_handle, s32 mod);
   void SetSoundPBend(s32 sound_handle, s32 bend);  // rac1: the handler's pitch bend
+  void SetReverbMode(s32 mode, s32 delay = 0, s32 feedback = 0);
+  void SetReverbDepth(s16 left, s16 right);
+  void AutoReverb(s16 depth, s32 delta_time, s32 channel_flags);
   s32 GetTick() { return mTick; };
   void StopAllSounds();
   int ActiveSounds() { std::scoped_lock lock(mTickLock); return static_cast<int>(mHandlers.size()); }  // rac1: a debug count

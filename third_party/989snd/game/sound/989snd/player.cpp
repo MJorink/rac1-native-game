@@ -189,7 +189,7 @@ void Player::SetMasterVolume(u32 group, s32 volume) {
 
   // Master volume
   if (group == 16) {
-    mSynth.SetMasterVol(0x3ffff * volume / 0x400);
+    mSynth.SetMasterVol(0x3fff * volume / 0x400);
   }
 }
 
@@ -273,6 +273,15 @@ void Player::SetSoundVolPan(s32 sound_id, s32 vol, s32 pan) {
   handler->second->SetVolPan(vol, pan);
 }
 
+void Player::AutoPan(s32 sound_handle, s32 pan, s32 dir, s32 delta_time, s32 mode) {
+  std::scoped_lock lock(mTickLock);
+  auto handler = mHandlers.find(sound_handle);
+  if (handler == mHandlers.end())
+    return;
+
+  handler->second->AutoPan(pan, dir, delta_time, mode);
+}
+
 void Player::SetSoundPmod(s32 sound_handle, s32 mod) {
   std::scoped_lock lock(mTickLock);
   auto handler = mHandlers.find(sound_handle);
@@ -290,6 +299,21 @@ void Player::SetSoundPBend(s32 sound_handle, s32 bend) {
     return;
 
   handler->second->SetPBend(bend);
+}
+
+void Player::SetReverbMode(s32 mode, s32 delay, s32 feedback) {
+  std::scoped_lock lock(mTickLock);
+  mSynth.SetReverbMode(mode, delay, feedback);
+}
+
+void Player::SetReverbDepth(s16 left, s16 right) {
+  std::scoped_lock lock(mTickLock);
+  mSynth.SetReverbDepth(left, right);
+}
+
+void Player::AutoReverb(s16 depth, s32 delta_time, s32 channel_flags) {
+  std::scoped_lock lock(mTickLock);
+  mSynth.AutoReverb(depth, delta_time, channel_flags);
 }
 
 void Player::StopAllSounds() {

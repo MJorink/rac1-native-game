@@ -26,12 +26,10 @@ s32 Grain::snd_SFX_GRAIN_TYPE_TONE(BlockSoundHandler& handler) {
   while (handler.m_cur_pan < 0)
     handler.m_cur_pan += 360;
 
-  if ((tone.Flags & 8) != 0) {
-    // Noise unsupported
-    return 0;
-  }
-
   auto voice = std::make_shared<BlockSoundVoice>(tone);
+  if ((tone.Flags & 8) != 0) {
+    voice->SetNoise(true, static_cast<u8>(tone.CenterNote & 0x3f));
+  }
 
   s32 vol = tone.Vol;
 
