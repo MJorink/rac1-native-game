@@ -1,0 +1,5 @@
+# rac1-native: lights placed by hand for level 14 (the debug menu's Lights tab)
+# light x y z  r g b  intensity radius flicker on
+# Oltanis. The sun raised from the key light's 29 degrees to 50, its azimuth kept: in the streets between the tall buildings
+# 22 % of what faces the sun saw it, 56 % at 50 degrees. Our choice (docs/lighting.md, "The level's own sun").
+sun -140.5 50.0

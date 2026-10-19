@@ -44,7 +44,6 @@ int g_point_shadows = env_int("RAC1_POINT_SHADOWS", 0);
 int g_auto_lights = env_int("RAC1_AUTO_LIGHTS", 1);
 int g_shadow_cache = env_int("RAC1_SHADOW_CACHE", 1);
 int g_user_light_selected = -1;
-int g_shadow_fade = env_int("RAC1_SHADOW_FADE", 1);
 int g_ao = env_int("RAC1_AO", 0);
 float g_shadow_moby_dist = std::getenv("RAC1_SHADOW_MOBY_DIST") != nullptr ? static_cast<float>(std::atof(std::getenv("RAC1_SHADOW_MOBY_DIST"))) : 0.0f;
 
@@ -54,7 +53,6 @@ constexpr int kUnit = 24;  // the shadow map's texture unit (the world's sampler
 constexpr GLenum kGlCubeMapArray = 0x9009;  // (GL_TEXTURE_CUBE_MAP_ARRAY, GL 4.0: not in the loader's header)
 constexpr int kPtUnit = 25;  // the point lights' cube shadow maps' unit
 constexpr int kTileUnit = 26;
-constexpr int kDepthUnit = 27;  // the cascades' maps without the compare (their depths) // the point lights' screen tiles' unit
 constexpr int kTilesX = 32, kTilesY = 18;  // (the view's clip square cut into tiles: per tile the lights whose sphere reaches it)
 constexpr int kPtShadows = 4;  // the point lights with a shadow at most (the nearest)
 constexpr int kPtRes = 512;    // their cube faces' resolution
@@ -67,6 +65,13 @@ constexpr float kBack = 400.0f;
 // static world is drawn again); the casters outside the view are looked for in the same larger sphere (mrp_lighting_cull_params)
 constexpr float kCacheGrow = 1.25f;
 std::atomic<bool> g_sun_known{false};
+// the level's own sun direction (our data: "sun <azimuth> <elevation>" in data/lights/levelNN.txt, degrees; see mrp_lighting.h)
+struct SunFile {
+    bool on = false;
+    float az = 0.0f, el = 45.0f;
+} g_sun_file;
+bool g_sun_snap = false;  // (the editor changed it: the sun turned at once, not a degree a frame)
+void user_ensure();  // (the level's file read, once per level: below)
 std::atomic<bool> g_has_sun{true};  // the level's key light comes from above: the sun's shadows (else none: Blarg)
 // how much of the sun's weight the view keeps: 0 covered from the sun .. 1 open (see kProbeW)
 float view_open();
@@ -91,6 +96,7 @@ struct State {
     glm::vec3 sun{0.0f, 0.0f, 1.0f};  // toward the sun
     float sun_k = 1.0f;               // its shadows' weight (the zone's light's share; faded between zones)
     glm::vec4 key{0.0f};              // the key light's colour (as the set holds it) and back-face factor: what a shadow takes off the world's colours
+    glm::vec3 key_dir{0.0f, 0.0f, 1.0f};  // toward the key light as the game lights with it (the sun's direction unless the level's file turns it)
     int npts = 0;                     // the frame's active point lights: position, radius; colour
     glm::vec4 pt_pos[kMaxPts], pt_col[kMaxPts];  // (pt_col.w: the light's cube in the shadow array, -1 none)
     int pt_slot[kMaxPts] = {};                   // (the game's slot of each: its casters' view, 3 + slot; -1 an automatic emitter)
@@ -164,17 +170,12 @@ SetSun set_sun(uint32_t set) {
     return r;
 }
 
-// orig: (host) the direction toward the sun this frame, and its shadows' weight (0..1; 0: no sun): RAC1_SUN_DIR="x,y,z" (world, z up),
-// else the light sets the game lights the hero with - moby +0x38 / +0x39, blended by +0x3a / 256: the zone's
+// orig: (host) the game's key light this frame: the direction toward it, its shadows' weight (0..1; 0: no sun) - the light sets the game lights the hero with - moby +0x38 / +0x39, blended by +0x3a / 256: the zone's
 // own key light, as Ratchet is lit (Veldin's outdoors set 0, its house set 1; Blarg's zones each their own) - each set's sun (set_sun),
 // the two blended. On Veldin's outdoors (-0.397, 0.852, -0.342): the low warm sun the sky shows (checked against the screenshots)
-glm::vec3 sun_direction(float* weight, glm::vec4* key) {
+glm::vec3 game_sun(float* weight, glm::vec4* key) {
     *weight = 1.0f;
     *key = glm::vec4(0.0f);
-    if (const char* e = std::getenv("RAC1_SUN_DIR")) {
-        float x = 0, y = 0, z = 0;
-        if (std::sscanf(e, "%f,%f,%f", &x, &y, &z) == 3 && x * x + y * y + z * z > 1e-6f) return glm::normalize(glm::vec3(x, y, z));
-    }
     if (std::getenv("RAC1_SHADOW_LIGHTS") != nullptr) {  // (testing: the level's light sets, once)
         static uint32_t shown = 0xffffffffu;
         if (shown != OV(0x0017fec0u)) {
@@ -255,6 +256,31 @@ glm::vec3 sun_direction(float* weight, glm::vec4* key) {
     }
     *weight = 0.0f;
     return glm::normalize(glm::vec3(0.4f, -0.85f, 0.35f));
+}
+
+// orig: (host) the sun's shadows this frame: the direction toward the sun, their weight, the key light's colour and the game's own
+// direction for it (what a shadow takes off the world's colours: the game's term, whatever way the shadows are cast). The game's key
+// light (game_sun), turned where the level's file says so (g_sun_file: only where the game has a sun - its weight and colour kept);
+// RAC1_SUN_DIR="x,y,z" (testing, world, z up) turns it everywhere, a sun of weight 1 where the game has none
+glm::vec3 sun_direction(float* weight, glm::vec4* key, glm::vec3* key_dir) {
+    const glm::vec3 g = game_sun(weight, key);
+    *key_dir = g;
+    if (const char* e = std::getenv("RAC1_SUN_DIR")) {
+        float x = 0, y = 0, z = 0;
+        if (std::sscanf(e, "%f,%f,%f", &x, &y, &z) == 3 && x * x + y * y + z * z > 1e-6f) {
+            if (!(*weight > 0.0f)) {
+                *weight = 1.0f;
+                *key = glm::vec4(0.0f);
+            }
+            return glm::normalize(glm::vec3(x, y, z));
+        }
+    }
+    user_ensure();
+    if (g_sun_file.on && *weight > 0.0f) {
+        const float az = glm::radians(g_sun_file.az), el = glm::radians(g_sun_file.el);
+        return glm::vec3(std::cos(el) * std::cos(az), std::cos(el) * std::sin(az), std::sin(el));
+    }
+    return g;
 }
 
 // orig: (host) testing, RAC1_TFRAG_LIGHT_TRACE=<every>[,x,y,z,r]: the terrain's lit colours near the hero (or that point) taken
@@ -382,7 +408,8 @@ void fit_cascades() {
     {  // the zone's sun: turned toward a new zone's at most 1 degree a frame, its shadows' weight faded (1 / 30 a frame)
         float tw = 0.0f;
         glm::vec4 tkey(0.0f);
-        const glm::vec3 target = sun_direction(&tw, &tkey);
+        glm::vec3 tkey_dir(0.0f, 0.0f, 1.0f);
+        const glm::vec3 target = sun_direction(&tw, &tkey, &tkey_dir);
         const float zone_w = tw;
         tw *= view_open();  // (a view covered from the sun: its shadows faded out, the cascades still drawn - the probe's)
         static glm::vec3 cur{0.0f, 0.0f, 1.0f};
@@ -390,13 +417,21 @@ void fit_cascades() {
         static int32_t lvl = -1;
         const int32_t level = lw(0x0015ed84);
         static glm::vec4 curkey{0.0f};
+        static glm::vec3 curkey_dir{0.0f, 0.0f, 1.0f};
         if (level != lvl) {
             lvl = level;
             cur = target;
             curw = tw;
             curkey = tkey;
+            curkey_dir = tkey_dir;
+        } else if (g_sun_snap) {  // (the debug menu's sun editor: at once)
+            cur = target;
+            curw = tw;
+            g_sun_snap = false;
         } else {
-            curkey += (tkey - curkey) * 0.1f;  // (a new zone's key light's colour: over about half a second)
+            curkey += (tkey - curkey) * 0.1f;  // (a new zone's key light's colour and direction: over about half a second)
+            const glm::vec3 kd = curkey_dir + (tkey_dir - curkey_dir) * 0.1f;
+            if (glm::dot(kd, kd) > 1e-6f) curkey_dir = glm::normalize(kd);
             curw += std::clamp(tw - curw, -1.0f / 30.0f, 1.0f / 30.0f);
             if (curw <= 0.02f) {
                 cur = target;  // (unseen: at once)
@@ -409,6 +444,7 @@ void fit_cascades() {
         g_sh.sun = cur;
         g_sh.sun_k = curw;
         g_sh.key = curkey;
+        g_sh.key_dir = curkey_dir;
         g_has_sun.store(curw > 0.01f);
         g_casc_on.store(curw > 0.01f || zone_w > 0.01f);
     }
@@ -1444,6 +1480,8 @@ std::string user_path(int level) {
 void user_load(int level) {
     g_user.clear();
     g_user_noauto.clear();
+    g_sun_file = SunFile{};
+    g_sun_snap = true;  // (a level's sun, or the file read again: at once)
     g_user_notes.clear();
     g_user_level = level;
     g_user_path = user_path(level);
@@ -1464,6 +1502,12 @@ void user_load(int level) {
             g_user_noauto.push_back(cls);
             continue;
         }
+        if (float az = 0, el = 0; std::sscanf(line, "sun %f %f", &az, &el) == 2) {
+            g_sun_file.on = true;
+            g_sun_file.az = az;
+            g_sun_file.el = std::clamp(el, 5.0f, 90.0f);
+            continue;
+        }
         if (std::sscanf(line, "light %f %f %f %f %f %f %f %f %f %d", &l.pos[0], &l.pos[1], &l.pos[2], &l.col[0], &l.col[1], &l.col[2], &l.intensity, &l.radius,
                         &l.flicker, &on) >= 9) {
             l.on = on != 0;
@@ -1472,8 +1516,47 @@ void user_load(int level) {
     }
     std::fclose(f);
     std::printf("[lights] level %d: %zu lights placed by hand (%s)\n", level, g_user.size(), g_user_path.c_str());
+    if (g_sun_file.on) std::printf("[lights] level %d: the sun turned to azimuth %.1f, elevation %.1f degrees\n", level, g_sun_file.az, g_sun_file.el);
+}
+// orig: (host) the current level's file read when the level changed (its sun is wanted at the shadow pass's start, whatever the
+// secondary lights' setting)
+void user_ensure() {
+    const int level = static_cast<int>(lw(0x0015ed84));
+    if (level != g_user_level) user_load(level);
 }
 }  // namespace
+
+// orig: (host) see mrp_lighting.h
+bool mrp_user_sun(float* az, float* el) {
+    *az = g_sun_file.az;
+    *el = g_sun_file.el;
+    return g_sun_file.on;
+}
+// orig: (host) see mrp_lighting.h
+void mrp_user_sun_set(bool on, float az, float el) {
+    g_sun_snap = true;
+    g_sun_file.on = on;
+    g_sun_file.az = az;
+    g_sun_file.el = std::clamp(el, 5.0f, 90.0f);
+}
+// orig: (host) see mrp_lighting.h
+bool mrp_lighting_sun_turn(float r[9]) {
+    if (g_modern_shadows == 0 || !g_sun_known.load()) return false;
+    const glm::vec3 a = glm::normalize(g_sh.key_dir), b = glm::normalize(g_sh.sun), ax = glm::cross(a, b);
+    const float cs = glm::dot(a, b), sn = glm::length(ax);
+    if (sn < 1e-4f && cs > 0.0f) return false;
+    glm::mat3 m(1.0f);
+    if (sn >= 1e-4f) m = glm::mat3(glm::rotate(glm::mat4(1.0f), std::atan2(sn, cs), ax / sn));
+    else m = glm::mat3(glm::rotate(glm::mat4(1.0f), glm::pi<float>(), std::fabs(a.z) < 0.9f ? glm::vec3(0, 0, 1) : glm::vec3(1, 0, 0)));
+    std::memcpy(r, glm::value_ptr(m), sizeof(float) * 9);
+    return true;
+}
+// orig: (host) see mrp_lighting.h
+void mrp_lighting_game_sun(float* az, float* el) {
+    const glm::vec3 d = g_sh.key_dir;
+    *az = glm::degrees(std::atan2(d.y, d.x));
+    *el = glm::degrees(std::asin(std::clamp(d.z, -1.0f, 1.0f)));
+}
 
 // orig: (host) see mrp_lighting.h
 std::vector<UserLight>& mrp_user_lights() { return g_user; }
@@ -1504,6 +1587,7 @@ bool mrp_user_lights_save() {
     std::fprintf(f, "# rac1-native: lights placed by hand for level %d (the debug menu's Lights tab)\n", g_user_level);
     std::fprintf(f, "# light x y z  r g b  intensity radius flicker on\n");
     for (const std::string& n : g_user_notes) std::fprintf(f, "%s\n", n.c_str());
+    if (g_sun_file.on) std::fprintf(f, "sun %.1f %.1f\n", g_sun_file.az, g_sun_file.el);
     for (int c : g_user_noauto) std::fprintf(f, "noauto %d\n", c);
     for (const UserLight& l : g_user)
         std::fprintf(f, "light %.3f %.3f %.3f  %.3f %.3f %.3f  %.3f %.3f %.3f %d\n", l.pos[0], l.pos[1], l.pos[2], l.col[0], l.col[1], l.col[2], l.intensity, l.radius,
@@ -1891,20 +1975,6 @@ void mrp_lighting_shadow_pass() {
     point_tiles_update();
     glActiveTexture(GL_TEXTURE0 + kTileUnit);
     glBindTexture(GL_TEXTURE_2D, g_sh.tiles);
-    {  // the cascades' maps again, read as depths (a sampler without the compare)
-        static GLuint smp = 0;
-        if (smp == 0) {
-            glGenSamplers(1, &smp);
-            glSamplerParameteri(smp, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glSamplerParameteri(smp, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glSamplerParameteri(smp, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glSamplerParameteri(smp, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glSamplerParameteri(smp, GL_TEXTURE_COMPARE_MODE, GL_NONE);
-        }
-        glActiveTexture(GL_TEXTURE0 + kDepthUnit);
-        glBindTexture(GL_TEXTURE_2D_ARRAY, g_sh.tex);
-        glBindSampler(kDepthUnit, smp);
-    }
     glActiveTexture(GL_TEXTURE0);
     g_sh.on = true;
 }
@@ -1926,11 +1996,9 @@ ShadowLocs mrp_lighting_locs(unsigned prog) {
     l.param = glGetUniformLocation(p, "uShParam");
     l.texel = glGetUniformLocation(p, "uShTexel");
     l.part = glGetUniformLocation(p, "uShPart");
-    l.depth = glGetUniformLocation(p, "uShDepth");
-    l.range = glGetUniformLocation(p, "uShRange");
-    l.fade = glGetUniformLocation(p, "uShFade");
     l.sun_k = glGetUniformLocation(p, "uShSunK");
     l.key = glGetUniformLocation(p, "uShKey");
+    l.key_dir = glGetUniformLocation(p, "uShKeyDir");
     l.debug = glGetUniformLocation(p, "uShDebug");
     l.pt_n = glGetUniformLocation(p, "uPtN");
     l.pt_pos = glGetUniformLocation(p, "uPtPos");
@@ -1955,7 +2023,6 @@ void bind_common(const ShadowLocs& l) {
 // runs in, draws the sky alone (an empty world): its sky was never drawn
 void bind_units(const ShadowLocs& l) {
     glUniform1i(l.map, kUnit);
-    glUniform1i(l.depth, kDepthUnit);
     glUniform1i(l.pt_map, kPtUnit);
     glUniform1i(l.pt_tiles, kTileUnit);
 }
@@ -1977,12 +2044,9 @@ void mrp_lighting_bind_receiver(const ShadowLocs& l, bool sky) {
     glUniform4f(l.param, static_cast<float>(g_shadow_strength) / 100.0f, g_has_sun.load() ? static_cast<float>(kCascades) : 0.0f, 0.08f, 1.0f);
     glUniform3f(l.texel, g_sh.casc[0].texel, g_sh.casc[1].texel, g_sh.casc[2].texel);
     glUniform3f(l.part, g_sh.casc[0].part, g_sh.casc[1].part, g_sh.casc[2].part);
-    if (l.depth >= 0) {  // (only the lighting's variants have them)
-        static const float fd[3] = {static_cast<float>(env_int("RAC1_SHADOW_FADE_FROM", 25)), static_cast<float>(env_int("RAC1_SHADOW_FADE_TO", 120)),
-                                    static_cast<float>(env_int("RAC1_SHADOW_FADE_KEEP", 35)) / 100.0f};  // (testing: units, units, percent)
-        glUniform3f(l.range, g_sh.casc[0].range, g_sh.casc[1].range, g_sh.casc[2].range);
-        glUniform4f(l.fade, fd[0], fd[1], fd[2], g_shadow_fade != 0 ? 1.0f : 0.0f);
+    if (l.sun_k >= 0) {  // (only the lighting's variants have them)
         glUniform1f(l.sun_k, g_sh.sun_k);
+        glUniform3f(l.key_dir, g_sh.key_dir.x, g_sh.key_dir.y, g_sh.key_dir.z);
         if (l.key >= 0) {  // (RAC1_WORLD_SHADOW=share, testing / no key light known: the old estimate, the strength's share of the colour)
             static const bool share = std::getenv("RAC1_WORLD_SHADOW") != nullptr && std::strcmp(std::getenv("RAC1_WORLD_SHADOW"), "share") == 0;
             const glm::vec4& k = g_sh.key;

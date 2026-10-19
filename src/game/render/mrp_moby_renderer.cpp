@@ -1384,6 +1384,8 @@ void build_frame() {
     }
     const glm::dmat4 vp = glm::dmat4(world_view_proj());
     const ViewInverse vinv = view_inverse(f);
+    glm::mat3 turn(1.0f);  // (the modern lighting's sun turned by the level's file: the mobys' key light with it)
+    const bool turned = mrp_lighting_sun_turn(glm::value_ptr(turn));
     PrimInfo cur_tex;  // the GS's texture state along the chain (before the first switch: the white texture)
     cur_tex.word = 1;
     F.joints_extra.clear();
@@ -1519,6 +1521,16 @@ void build_frame() {
             const glm::mat4 clip = glm::mat4(vp * W);
             std::memcpy(P.clip, glm::value_ptr(clip), sizeof P.clip);
             for (uint32_t q = 0; q < 8; ++q) std::memcpy(&P.light[q * 4], &f.records[m.record_first + 0x40 + q * 0x10], 16);
+            if (turned) {  // the level's own sun (the modern lighting): the record's key light (its first direction, in the part's frame) turned with it
+                glm::dmat3 L3(W);
+                for (int i = 0; i < 3; ++i) L3[i] = glm::normalize(L3[i]);
+                const glm::dvec3 kd(P.light[0], P.light[4], P.light[8]);
+                glm::dvec3 t = glm::inverse(L3) * (glm::dmat3(turn) * (L3 * kd));
+                if (glm::length(t) > 0.0) t *= glm::length(kd) / glm::length(t);
+                P.light[0] = static_cast<float>(t.x);
+                P.light[4] = static_cast<float>(t.y);
+                P.light[8] = static_cast<float>(t.z);
+            }
             const bool tint = (m.flags & 0x10) != 0 && pg.tint_part;
             std::memcpy(P.sub, sub, sizeof sub);
             P.info[0] = static_cast<int32_t>(m.joint_first);

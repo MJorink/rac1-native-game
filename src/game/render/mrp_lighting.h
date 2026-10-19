@@ -37,9 +37,6 @@ extern int g_auto_lights;
 // orig: (host) how far from the camera the mobys cast into the sun's shadows, units (0: as far as the cascades reach;
 // RAC1_SHADOW_MOBY_DIST; Options > Graphics > Shadow Distance)
 extern float g_shadow_moby_dist;
-// orig: (host) the shadows of far casters lighter (1, default; RAC1_SHADOW_FADE=0: as dark as the near ones' - the sun's
-// light scattered around a tall caster far away)
-extern int g_shadow_fade;
 // orig: (host) ambient occlusion on the 3D (screen space, from the depth; 0 off, the default; RAC1_AO; Options > Graphics)
 extern int g_ao;
 // orig: (host) the ambient occlusion over this frame's 3D (after the MRP world and mobys, before the effects and the 2D;
@@ -65,6 +62,17 @@ void mrp_user_lights_reload();
 const char* mrp_user_lights_path();
 // orig: (host) the debug menu's selected light (-1 none): it pulses, so that it is found
 extern int g_user_light_selected;
+// orig: (host) the level's own sun ("sun <azimuth> <elevation>" in its file, degrees; azimuth from +x toward +y, the direction
+// toward the sun): the game's key light's direction replaced where the game has a sun, its colour and weight kept, and its own
+// direction still the one a shadow takes the key light's term off with. Our data, not the game's: where the key light's direction
+// leaves the places the player walks in the permanent shade of the level's walls (Novalis's start). True when set
+bool mrp_user_sun(float* az, float* el);
+void mrp_user_sun_set(bool on, float az, float el);
+// orig: (host) the rotation (column-major 3x3) taking the game's key light's direction to the sun's, true when the modern lighting is
+// on and the level's file turns the sun (the mobys' light records are turned with it: mrp_moby_renderer.cpp)
+bool mrp_lighting_sun_turn(float r[9]);
+// orig: (host) the game's key light's direction as the shadows last used it (azimuth, elevation, degrees)
+void mrp_lighting_game_sun(float* az, float* el);
 // orig: (host) the tie classes whose automatic emitters the level's file turns off ("noauto <class>"), and on again
 bool mrp_user_lights_class_off(int o_class);
 void mrp_user_lights_class_set_off(int o_class, bool off);
@@ -122,9 +130,8 @@ struct ShadowLocs {
     int pt_tiles = -1, pt_vp = -1;           // (the screen tiles' lights, the view's world -> clip)
     int opaque = -1;                         // (the shadow pass: the batch is opaque - no blending -: its depth alone)
     int part = -1;                           // (the cascades' squares' share of their layer)
-    int depth = -1, range = -1, fade = -1;   // (the maps' depths, the cascades' ranges, the far casters' fade)
     int sun_k = -1;                          // (the sun's shadows' weight)
-    int key = -1;                            // (the key light's colour and back factor: the world's shadows)
+    int key = -1, key_dir = -1;              // (the key light's colour and back factor, its direction: the world's shadows)
 };
 // orig: (host) the locations of a linked program
 ShadowLocs mrp_lighting_locs(unsigned prog);
@@ -182,11 +189,10 @@ bool mrp_moby_caster_rect(const float* light_vp, float rect[4], const float* wit
     "uniform vec4 uShParam;\n" /* x strength, y count, z the cascades' blend band, w the PCF radius */ \
     "uniform vec3 uShTexel;\n" /* the cascades' texel in world units */                                \
     "#if defined(SH_POINTS) || defined(SH_SPLIT)\n" /* (the lighting's variants only) */     \
-    "uniform sampler2DArray uShDepth;\n" /* the same maps, their depths (no compare) */                 \
-    "uniform vec3 uShRange;\n"           /* the cascades' depth ranges, units */                         \
-    "uniform vec4 uShFade;\n"            /* far casters: from, to (units), the shadow kept, on */        \
     "uniform float uShSunK;\n"           /* the sun's shadows' weight (the zone's light; faded) */      \
     "uniform vec4 uShKey;\n"             /* the key light's colour (x 128 / 255) and back factor; w < 0: none */ \
+    "uniform vec3 uShKeyDir;\n"          /* toward the key light as the game lights with it (the sun may be turned) */ \
+    "float sh_vis = 1.0;\n"              /* the sun's visibility, the zone's weight not applied */ \
     "#endif\n"                                                                                          \
     "uniform int uShDebug;\n"                                                                           \
     "uniform int uPtN;\n"                                                                               \
@@ -248,23 +254,8 @@ bool mrp_moby_caster_rect(const float* light_vp, float rect[4], const float* wit
     "        }\n"                                                                                       \
     "        break;\n"                                                                                  \
     "    }\n"                                                                                           \
-    "#if defined(SH_POINTS) || defined(SH_SPLIT)\n"                                                    \
-    "    if (uShFade.w > 0.0 && casc >= 0 && vis < 1.0) {\n" /* a far caster's shadow lighter: 5-tap cross blocker depth */ \
-    "        vec3 p = vShWorld + n * (uShTexel[casc] * 1.5) + uShSun * uShTexel[casc];\n"              \
-    "        vec4 q = uShCasc[casc] * vec4(p, 1.0);\n"                                                 \
-    "        float r = 3.0 / float(textureSize(uShDepth, 0).x) / uShPart[casc];\n"                    \
-    "        float sum = 0.0, cnt = 0.0;\n"                                                             \
-    "        const vec2 offs[5] = vec2[5](vec2(0.0, 0.0), vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(-1.0, 1.0), vec2(1.0, 1.0));\n" \
-    "        for (int i = 0; i < 5; ++i) {\n"                                                           \
-    "            float b = texture(uShDepth, vec3((q.xy + offs[i] * r) * uShPart[casc], float(casc))).r;\n" \
-    "            if (b < q.z - 0.0005) { sum += b; cnt += 1.0; }\n"                                    \
-    "        }\n"                                                                                       \
-    "        if (cnt > 0.0) {\n"                                                                        \
-    "            float d = (q.z - sum / cnt) * uShRange[casc];\n"                                       \
-    "            float keep = mix(1.0, uShFade.z, smoothstep(uShFade.x, uShFade.y, d));\n"              \
-    "            vis = 1.0 - (1.0 - vis) * keep;\n"                                                     \
-    "        }\n"                                                                                       \
-    "    }\n"                                                                                           \
+    "#if defined(SH_POINTS) || defined(SH_SPLIT)\n" /* one strength whatever blocks the sun, near or far: lit or not */ \
+    "    sh_vis = vis;\n"                                                                              \
     "    vis = 1.0 - (1.0 - vis) * uShSunK;\n"                                                         \
     "#endif\n"                                                                                          \
     "    sh_state = vec4(vis, facing, float(casc), 1.0);\n"                                             \
@@ -319,11 +310,11 @@ bool mrp_moby_caster_rect(const float* light_vp, float rect[4], const float* wit
     "    if (uShDebug == 2) return vec3(sh_state.x * max(sh_state.y, 0.15));\n"                         \
     "    float k = 1.0 - uShParam.x * (1.0 - sh_state.x) * sh_state.y;\n"                               \
     "    vec3 o = c * k;\n"                                                                             \
-    "#ifdef SH_POINTS\n" /* the world: the key light's own term taken off, as the game adds it (base + colour max(n.l, k n.l)) */ \
-    "    if (uShKey.w >= 0.0) {\n"                                                                     \
-    "        float ndl = dot(sh_n, uShSun);\n"                                                         \
-    "        vec3 key = uShKey.rgb * max(ndl, uShKey.w * ndl);\n"                                       \
-    "        o = max(c - max(key, vec3(0.0)) * (1.0 - sh_state.x), vec3(0.0));\n"                       \
+    "#ifdef SH_POINTS\n" /* the world relit by our sun: the game's key light term (base + colour max(n.l, k n.l)) taken off, */ \
+    "    if (uShKey.w >= 0.0) {\n" /* the same light's term from the sun's direction, times its visibility, put back */ \
+    "        float ndg = dot(sh_n, uShKeyDir), nds = dot(sh_n, uShSun);\n"                             \
+    "        vec3 kg = uShKey.rgb * max(ndg, uShKey.w * ndg), ks = uShKey.rgb * max(nds, uShKey.w * nds);\n" \
+    "        o = max(c + uShSunK * (ks * sh_vis - kg), vec3(0.0));\n"                                  \
     "    }\n"                                                                                          \
     "#endif\n"                                                                                         \
     "    if (uShDebug == 1) {\n"                                                                        \

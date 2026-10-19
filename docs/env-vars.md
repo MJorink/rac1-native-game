@@ -192,10 +192,6 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_SHADOW_DEBUG` | integer; 0 = off, 2 and 3 select shadow debug views; default 0 | Selects a debug visualisation in the lighting shader (2 shows shadow state, 3 shows only the added point light term). |
 | `RAC1_SHADOW_DUMP` | integer n; unset = off | Every n-th draw writes the shadow cascades' depth to shadow_casc<k>.pgm images in the current directory. |
 | `RAC1_SHADOW_EARLYZ` | 0 = off; default on | Switches off the depth-only program used for opaque shadow casters, to compare. |
-| `RAC1_SHADOW_FADE` | 0 = off, 1 = on; default 1 | Switches the distance fade of far shadows off or on. |
-| `RAC1_SHADOW_FADE_FROM` | integer world units; default 25 | Distance where the far-shadow fade starts. |
-| `RAC1_SHADOW_FADE_KEEP` | integer percent; default 35 | How much shadow strength is kept at the end of the far-shadow fade. |
-| `RAC1_SHADOW_FADE_TO` | integer world units; default 120 | Distance where the far-shadow fade ends. |
 | `RAC1_SHADOW_FBO_TRACE` | any value = on; default off | Prints (up to 5 times) when the read framebuffer differs from the draw framebuffer during the shadow pass. |
 | `RAC1_SHADOW_LIGHTS` | any value = on; default off | Prints the level's light sets once, when the lighting first reads them. |
 | `RAC1_SHADOW_MCACHE` | 0 = off; default on | Switches off the cache of moving shadow casters, to compare. |
@@ -223,7 +219,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_SUN_COVER` | 0 = off; default on | The modern lighting's check of how much of the view sees the sun (the sun's shadows fade out in a view covered from it, such as a room). 0 keeps the zone's sun everywhere, to compare. See [Lighting](lighting.md). |
 | `RAC1_SUN_COVER_SKY` | 0 = off; default on | The modern lighting's memory of the places where the sky was in view (outdoors: the sun is kept there whatever the view shows). 0 leaves the view's measure alone, as in 0.4.0, to compare. See [Lighting](lighting.md). |
 | `RAC1_SUN_COVER_TRACE` | set (any value) = on; default off | Every 60 frames prints how much of the view sees the sun, the sky's share, whether the camera is outdoors (near a place the sky was seen from) and the sun's weight scale that follows from them. |
-| `RAC1_SUN_DIR` | three comma-separated floats "x,y,z"; unset = the level's own sun direction | Overrides the direction of the sun used by the modern lighting and shadows (normalised; ignored if near zero length). |
+| `RAC1_SUN_DIR` | three comma-separated floats "x,y,z"; unset = the level's own sun direction | Turns the modern lighting's sun to that direction toward it (normalised; ignored if near zero length), as a level's `sun` line would: the world and the mobys lit from it, the key light's colour kept; where the zone has no sun, a sun of weight 1 with the shadows' share (`RAC1_SHADOW_STRENGTH`). |
 | `RAC1_SUN_LEVEL` | set (any value) = on; default off | The modern lighting's sun always uses the level's light set 0 (the old way) instead of the light set the hero is lit with. See [Lighting](lighting.md). |
 | `RAC1_SUN_TRACE` | set (any value) = on; default off | Prints the light sets the hero is lit with, for the modern lighting's sun. See [Lighting](lighting.md). |
 | `RAC1_TFRAG_LIGHT_TRACE` | <every>[,x,y,z,r]; default off | Every <every> drawn frames with the modern lighting on, takes the terrain's (tfrag) lit vertex colours within r units (default 12) of the hero, or of x,y,z, apart as the game's relighting makes them: base colour, the light set's two directional terms, against the colour in EE memory; prints the means, the light sets used and the sun. See [Lighting](lighting.md). |

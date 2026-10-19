@@ -1,0 +1,7 @@
+# rac1-native: lights placed by hand for level 1 (the debug menu's Lights tab)
+# light x y z  r g b  intensity radius flicker on
+# Novalis. The sun raised from the key light's 33 degrees to 55, its azimuth kept (-22: toward +x, a little -y). At 33 degrees
+# the rock walls and the plateau beside the start valley keep it in shade all day: along the first walk (the start, the
+# landing pads, the river) a third of what faces the sun saw it; at 55 degrees about three quarters do, and the walls' shadows
+# fall at their feet. Our choice (the sun editor, docs/lighting.md "The level's own sun"); the light set's colour is kept.
+sun -22.0 55.0

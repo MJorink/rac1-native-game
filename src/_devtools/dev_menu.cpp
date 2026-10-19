@@ -915,6 +915,53 @@ void lights_markers(const std::vector<UserLight>& L) {
         dl->AddText(ImVec2(p.x + 9.0f, p.y - 8.0f), IM_COL32(255, 255, 255, 230), t);
     }
 }
+// The sun editor: the level's own sun direction (data/lights/levelNN.txt, "sun <azimuth> <elevation>"), applied at once while
+// playing; Save writes the level's file (its comments, the lights placed by hand and the classes turned off kept)
+bool g_sun_dirty = false;
+int g_sun_level = -1;
+void tab_sun() {
+    const int level = mrp_user_lights_level();
+    if (level != g_sun_level) {
+        g_sun_level = level;
+        g_sun_dirty = false;
+    }
+    if (level < 0 || g_modern_shadows == 0) {
+        ImGui::TextWrapped("The sun is the modern lighting's: Options > Graphics > Lighting (not Original).");
+        if (level < 0) return;
+    }
+    float az = 0.0f, el = 45.0f, gaz = 0.0f, gel = 0.0f;
+    bool own = mrp_user_sun(&az, &el);
+    mrp_lighting_game_sun(&gaz, &gel);
+    ImGui::Text("Level %d%s   %s", level, g_sun_dirty ? " (not saved)" : "", mrp_user_lights_path());
+    ImGui::Text("The game's key light: azimuth %.1f, elevation %.1f degrees (toward the light; azimuth from +x toward +y)", gaz, gel);
+    bool use_game = !own;
+    bool ch = false;
+    if (ImGui::Checkbox("Use the game's key light", &use_game)) {
+        if (!use_game && !own) {  // (starting from the game's own)
+            az = gaz;
+            el = gel;
+        }
+        own = !use_game;
+        ch = true;
+    }
+    if (own) {
+        ch |= ImGui::SliderFloat("Azimuth (yaw)", &az, -180.0f, 180.0f, "%.1f deg");
+        ch |= ImGui::SliderFloat("Elevation (pitch)", &el, 5.0f, 90.0f, "%.1f deg");
+    }
+    if (ch) {
+        mrp_user_sun_set(own, az, el);
+        g_sun_dirty = true;
+    }
+    if (ImGui::Button("Save")) g_sun_dirty = !mrp_user_lights_save();
+    ImGui::SameLine();
+    if (ImGui::Button("Reload")) {
+        mrp_user_lights_reload();
+        g_sun_dirty = false;
+    }
+    ImGui::TextWrapped("Applied at once (the shadow maps are drawn again for the new sun). Only where the game has a sun: its "
+                       "colour and weight are the game's, and a shadow still takes off the key light's term the game lit with. "
+                       "Save writes the whole level file (the Lights tab's unsaved edits too).");
+}
 void tab_lights() {
     std::vector<UserLight>& L = mrp_user_lights();
     const int level = mrp_user_lights_level();
@@ -1198,6 +1245,7 @@ void dev_menu_draw(double update_ms, double frame_ms) {
                 if (tab("Camera")) { tab_camera(); ImGui::EndTabItem(); }
                 if (tab("Rendering")) { tab_rendering(); ImGui::EndTabItem(); }
                 if (tab("Lights")) { tab_lights(); ImGui::EndTabItem(); }
+                if (tab("Sun")) { tab_sun(); ImGui::EndTabItem(); }
                 if (tab("Display")) { tab_display(); ImGui::EndTabItem(); }
                 if (tab("Audio")) { tab_audio(); ImGui::EndTabItem(); }
                 if (tab("Levels")) { tab_levels(); ImGui::EndTabItem(); }

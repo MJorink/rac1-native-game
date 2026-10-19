@@ -17,15 +17,18 @@ differs a lot between planets. Where each part comes from is described in
 [How a level is analysed](#how-a-level-is-analysed).
 
 - **The sun** is the light the game itself lights Ratchet with in the zone where he stands: the
-  hero's light sets, turned and faded as he moves from one zone to the next. It is not a fixed
-  per-level direction. Where the zone's light does not come from above, there is no sun and no sun
+  hero's light sets, turned and faded as he moves from one zone to the next. A level's own file
+  may turn it (`sun <azimuth> <elevation>`, the [sun editor](#the-sun-editor)) where the game's
+  direction leaves whole areas in the permanent shade of the level's walls (Novalis). Where the zone's light does not come from above, there is no sun and no sun
   shadows there. Where it does but a roof stops it (a room, a corridor, a ship's hold), so that
   almost nothing in view sees the sun and no sky has been seen from there, its shadows fade out and
   the picture is the original's lighting ([Views covered from the sun](#views-covered-from-the-sun)).
-- **A shadow takes off the sun's own light.** The terrain and the objects of the world are lit by
-  the game as a base colour plus the zone's lights; a sun shadow removes the key light's term, as the
-  mobys' shadows do, so the ground, the walls and Ratchet in the same shadow agree
-  ([How a shadow darkens](#how-a-shadow-darkens)).
+- **The world is lit by the sun, not by the baked key light.** The terrain and the objects of the
+  world are lit by the game as a painted base colour plus the zone's lights. With the lighting on,
+  the key light's baked term is taken off and the same light is put back from the sun's direction,
+  times the shadow's visibility; the mobys are lit the same way. Lit and shaded ground follow the
+  same sun, a point is lit or not whatever blocks it, near or far, and turning the sun turns the
+  whole lighting ([How the world is lit](#how-the-world-is-lit)).
 - **No drop shadows.** With the lighting on, the original's drop shadows under Ratchet and the
   mobys are never drawn, even where there is no sun (Daino's choice, 2026-10-19). The game still
   computes them; only the drawing is left out. Where there is no sun shadow nothing replaces them;
@@ -34,8 +37,9 @@ differs a lot between planets. Where each part comes from is described in
   When a level loads they are found automatically and turned into small point lights. This is
   our own heuristic, not game data, and it can be wrong (see the table below).
 - **Lights placed by hand** with the [light editor](#the-light-editor) cover what the automatic
-  search can't find. The project ships no hand-placed lights; it ships two level files that only
-  turn off an automatic class the search got wrong (Gaspar, Orxon).
+  search can't find. The project ships no hand-placed lights; its level files only turn off an
+  automatic class the search got wrong (Gaspar, Orxon) or turn the sun (Novalis, Kerwan, Eudora,
+  Oltanis, Quartu).
 
 **State per level** (what the project's own surveys found, with the lighting set to Medium,
 point-light shadows and ambient occlusion on; levels 8 to 18 also at Low and High). "Works" means
@@ -132,7 +136,7 @@ adding even inactive code to them changed the rounding of a few pixels.
 | Point lights per pixel | The game's own point lights lit per pixel, plus automatic emitters | the world |
 | Point lights per screen tile | Each pixel only walks the lights that reach its tile | performance |
 | Point-light shadows | Cube shadow maps for the nearest point lights | world and mobys |
-| Shadow distance and fade | How far mobys cast; far casters' shadows lighter | sun shadows |
+| Shadow distance | How far mobys cast | sun shadows |
 | Ambient occlusion | Screen-space darkening where surfaces meet | the 3D |
 | Light editor | Lights placed by hand, saved per level | the world |
 
@@ -209,7 +213,10 @@ where he stands**.
    shadows do not come back (they are never drawn with the lighting on).
 5. **The view covered** (our choice): the weight is then scaled by how much of the view sees the
    sun, see [Views covered from the sun](#views-covered-from-the-sun).
-6. **Overrides for testing:** `RAC1_SUN_DIR=x,y,z` forces a sun, `RAC1_SUN_LEVEL=1` always uses
+6. **The level's own sun** (our choice): the level's file may give the sun a direction of its own,
+   see [The level's own sun](#the-levels-own-sun).
+7. **Overrides for testing:** `RAC1_SUN_DIR=x,y,z` turns the sun as a level's file would (a sun
+   of weight 1 where the zone has none), `RAC1_SUN_LEVEL=1` always uses
    light set 0 (the old way), `RAC1_SUN_TRACE=1` prints the hero's sets and a census of the
    sets the level's mobys use, `RAC1_SUN_COVER=0` turns the covered views' fade off and
    `RAC1_SUN_COVER_TRACE=1` prints it.
@@ -289,10 +296,15 @@ shaded to lit with the camera. The memory of the sky keeps them steady outdoors
 - **Receiving.** A 3 x 3 PCF filter with a normal-offset bias. The shadowed colour is the one the
   game would give **without** the key light: for mobys from their light record (shader variant
   `SH_SPLIT`), for the world by taking the key light's term off its colour
-  ([How a shadow darkens](#how-a-shadow-darkens)).
-- **Far shadows are lighter.** For a pixel in shadow the shader finds the depth of the blockers.
-  Within 25 units along the ray the shadow is full; then it lightens to 35 % at 120 units and
-  beyond (`RAC1_SHADOW_FADE=0` turns it off).
+  ([How the world is lit](#how-the-world-is-lit)).
+- **One strength.** A point is in the sun or not, whatever blocks it and however far away: the
+  shadow map holds the nearest blocker, so overlapping shadows (a tree's inside a cliff's) do not
+  add up or cancel, and Ratchet's shadow shows wherever the ground is otherwise in the sun. The bias
+  and the filter are the same number of texels in every cascade, and the cascades blend over a band
+  at their edge. (0.4.0 lightened the shadow of a caster far along the sun's ray, to 35 % at 120
+  units: a cliff's shadow over Novalis's valley was lighter than a tree's, a tree's shadow vanished
+  where it fell inside the cliff's, and Ratchet's was faint in the cliff's. It was there because the
+  game's key light put that valley in permanent shade; the level's own sun does that job now.)
 - **Shadow Distance.** Beyond 40 / 80 / 140 units, or with no limit, mobys cast no sun shadow.
 
 ### The game's lights, per pixel
@@ -374,9 +386,10 @@ Made in the debug menu (F1, Lights tab) and saved in `data/lights/level<NN>.txt`
 [The light editor](#the-light-editor). They are positions and colours chosen by us, with nothing
 taken from the disc. They are lit like the automatic ones and ahead of them.
 
-The project ships two level files, and neither places a light: `level09.txt` (Gaspar) and
-`level10.txt` (Orxon) each turn off one automatic class that was taken for a lamp, with a comment
-saying why. The levels 0 to 7 have no file.
+The project's level files place no light: `level09.txt` (Gaspar) and `level10.txt` (Orxon) each turn
+off one automatic class that was taken for a lamp, and `level01.txt` (Novalis), `level03.txt`
+(Kerwan), `level04.txt` (Eudora), `level14.txt` (Oltanis) and `level15.txt` (Quartu) turn the sun,
+each with a comment saying why.
 
 ### Point-light shadows, per-pixel cost and occlusion
 
@@ -393,7 +406,7 @@ game's lights first, then emitters that have a moby within reach); a 32 x 18 til
   write it. The one exception is the debug light editor's "Ratchet to it" (see below).
 - **Test switches:** sun: `RAC1_SHADOWS`, `RAC1_SHADOW_RES`, `RAC1_SUN_DIR`, `RAC1_SUN_LEVEL`,
   `RAC1_SUN_TRACE`, `RAC1_SUN_COVER`, `RAC1_SUN_COVER_SKY`, `RAC1_WORLD_SHADOW`, `RAC1_TFRAG_LIGHT_TRACE`; lights: `RAC1_POINTS`, `RAC1_POINT_SHADOWS`, `RAC1_AUTO_LIGHTS`,
-  `RAC1_LIGHTS_TRACE`, `RAC1_LIGHTS_DIR`; shadows: `RAC1_SHADOW_CACHE`, `RAC1_SHADOW_FADE`,
+  `RAC1_LIGHTS_TRACE`, `RAC1_LIGHTS_DIR`; shadows: `RAC1_SHADOW_CACHE`,
   `RAC1_SHADOW_MOBY_DIST`; occlusion: `RAC1_AO`. The Graphics menu sets the same values; an
   environment variable, when present, wins.
 
@@ -435,7 +448,7 @@ applies a normal-offset bias (1.5 texels along the normal, 1 along the sun), fin
 that contains it, and blends into the next over a narrow band at the edge. Filtering is 3x3 PCF with
 hardware depth comparison and bilinear taps.
 
-### How a shadow darkens
+### How the world is lit
 
 The world's colours (terrain, ties, shrubs) are the game's own relighting (`world_tfrag_lighting`
 and its siblings, see [The original game's lighting](#the-original-games-lighting)): per vertex
@@ -444,10 +457,10 @@ and its siblings, see [The original game's lighting](#the-original-games-lightin
 colour = base + 128 * colour1 * max(n . l1, k1 n . l1) + 128 * colour2 * max(n . l2, k2 n . l2)   (bytes, at most 255)
 ```
 
-with `base` the level's per-vertex colour (painted by the artists, with its own light and dark
-patches), and light 1 of set 0 the key light the sun is taken from. Taking the terrain near the hero
-apart this way (`RAC1_TFRAG_LIGHT_TRACE`; recomposed within 1 of 255 of the colour in EE memory) gives,
-at the start of each level:
+with `base` the level's per-vertex colour (painted by the artists: the texture's tint, light and
+dark patches of their own), light 1 of set 0 the key light the sun is taken from and light 2 a
+small fill. Taking the terrain near the hero apart this way (`RAC1_TFRAG_LIGHT_TRACE`; recomposed
+within 1 of 255 of the colour in EE memory) gives, at the start of each level:
 
 | Level | lit = base + key light + second light (means, 0..255) | the vertices' light sets |
 |---|---|---|
@@ -458,28 +471,87 @@ at the start of each level:
 | Pokitaru | 108 = 63 + 46 + 0 | set 0 |
 | Oltanis | 48 = 34 + 14 + 0 | set 0 |
 
-So the terrain is lit by the same key light, from the same direction, as the sun the shadows are cast
-from; what the shadows disagreed with was how much they took off:
+So the terrain is lit by the same key light, from the same direction, as the sun's.
 
-- **The world** (`sh_apply`, the `SH_POINTS` variant): a shadow removes the key light's term,
-  `colour - (1 - visibility) * 128 / 255 * colour1 * max(n . sun, k1 n . sun)`, with `n` the face
-  normal. A surface the key light does not reach (turned away from the sun) keeps its colour, as it
-  receives no shadow: it was not lit by the sun in the game either. In 0.4.0 a shadow removed 55 % of
-  the whole colour, base included, scaled down on surfaces at a grazing angle and nothing on those
-  turned away: inside a shadow, ferns, slopes and grass turned slightly away from the sun stayed at
-  their full colour and looked lit beside the darkened ground, and Ratchet cast no shadow on them
-  (Novalis's start valley, Kerwan's first bridge). `RAC1_WORLD_SHADOW=share` gives the old way.
-- **Mobys** are lit per vertex from their light record, so the `SH_SPLIT` vertex shader also computes
-  the colour without the key light. The fragment shader mixes the two by the shadow's visibility,
-  which is exactly the original's formula with the sun blocked.
+**With the lighting on, the world is relit by the sun** (`sh_apply`, the `SH_POINTS` variant):
 
-The key light's colour follows the zone (half a second between zones). Where it is not known
-(`RAC1_SUN_DIR`) the world falls back to the share (`RAC1_SHADOW_STRENGTH`). Remaining differences
-from the exact formula: the face normal stands for the game's per-vertex normal, a colour the game
-clamped at 255 loses a little more than it should, and a vertex lit by another light set than set 0
-(a few on Novalis and Orxon) is shaded with set 0's key light.
+```
+colour' = colour + w * (K(n, sun) * visibility - K(n, key))      K(n, d) = 128 / 255 * colour1 * max(n . d, k1 n . d)
+```
+
+The key light's baked term, from the direction the game lit with (`key`), is taken off; the same
+light from the sun's direction is put back, times the sun's visibility. `n` is the face normal,
+`w` the sun's weight (the zone's, faded in a [covered view](#views-covered-from-the-sun): at 0 the
+colour is the game's). The painted base and the fill are kept: the base is the ambient. With the
+sun where the game has it, a point in the sun keeps its colour and a point in shadow loses the key
+light's term; with the sun turned (the level's own sun), the lit sides turn with it. No strength
+or ambient setting was needed: in shade a surface keeps base + fill, which is what the game shows
+of it without the key light, and what Ratchet shows in the same shade.
+
+**Mobys** are lit per vertex from their light record, whose first direction is the key light (in
+the part's own frame): the `SH_SPLIT` vertex shader also computes the colour without it, and the
+fragment shader mixes the two by the visibility, the original's formula with the sun blocked.
+When the level turns the sun, the record's key direction is turned the same way before it is
+drawn (`mrp_lighting_sun_turn`, in `mrp_moby_renderer.cpp`), so the mobys' lit sides follow it.
+
+Before, the world's shadows only took something off: in 0.4.0 55 % of the whole colour (base
+included, less at a grazing angle, nothing on a face turned away: ferns and slopes stayed lit inside
+a shadow, `RAC1_WORLD_SHADOW=share` gives that back), and the far casters' fade made a cliff's
+shadow lighter than a tree's. Remaining differences from the exact formula: the face normal stands
+for the game's per-vertex normal, a colour the game clamped at 255 gives back a little less, and a
+vertex lit by another light set than set 0 (a few on Novalis and Orxon) is relit with set 0's key
+light. Where the key light's colour is not known (`RAC1_SUN_DIR` in a zone without a sun) the world
+falls back to the share (`RAC1_SHADOW_STRENGTH`).
 
 The sky is never shadowed. With modern lighting on, the original drop shadows are not drawn.
+
+### The level's own sun
+
+Our choice, not the game's: nothing in a level's sky pins the sun, and on some levels the key
+light's direction leaves the places the player walks in permanent shade. A level's file
+(`data/lights/levelNN.txt`) may then say `sun <azimuth> <elevation>` (degrees, the direction toward
+the sun: azimuth from +x toward +y, elevation above the horizon, 5 to 90). It replaces the
+direction wherever the game has a sun; the weight, the colour and what is taken off (the game's own
+direction) are the game's. The value was chosen by measuring, along a walk from each level's start,
+the share of the view facing the sun that sees it (the covered views' probe, `RAC1_SUN_COVER_TRACE`):
+
+| Level | the key light (azimuth, elevation) | sees the sun | at 50 degrees | the level's own sun |
+|---|---|---|---|---|
+| Veldin | -65, 20 | 51 % | 77 % | |
+| Novalis | -22, 33 | 34 % | 73 % (55 degrees: about 75 %) | **-22, 55** |
+| Aridia | 20, 20 | 81 % | 90 % | |
+| Kerwan | -4, 35 | 30 % | 55 % | **-4, 50** |
+| Eudora | -141, 22 | 27 % | 47 % | **-141, 50** |
+| Rilgar | -159, 16 | 78 % | 86 % | |
+| Umbris | 179, 24 | 87 % | 85 % | |
+| Batalia | -135, 15 | 71 % | 88 % | |
+| Gaspar | 165, 40 | 79 % | 82 % | |
+| Orxon | -45, 20 | (the walk stays in the opening scene) | | |
+| Pokitaru | -48, 30 | 84 % | 85 % | |
+| Hoven | -135, 30 | 49 % | 74 % | |
+| Gemlik Base | 180, 20 | 82 % | 83 % | |
+| Oltanis | -141, 29 | 22 % | 56 % | **-141, 50** |
+| Quartu | 0, 20 | 8 % | 43 % | **0, 50** |
+| Kalebo III | -33, 30 | 56 % | 62 % | |
+| Drek's fleet | 28, 29 | 76 % | 74 % | |
+| Veldin finale | -175, 40 | 85 % | 86 % | |
+
+(Headless, the same scripted walk from each level's start, the second half of 3000 frames; a rough
+measure of the places near the start only.) The levels under about a third keep their azimuth and
+get a higher sun; Novalis was checked at its start valley (below) and given 55. The others keep the
+game's key light; Veldin and Hoven are candidates if a playtest finds their shade too heavy. Blarg
+has no sun in its main zones.
+
+### The sun editor
+
+Debug menu (F1, `--debug-tools`), tab **Sun**: the game's key light's direction for the level, a
+**Use the game's key light** switch and, off, the azimuth and elevation, applied at once (the sun is
+not eased a degree a frame after an edit). Everything that depends on the sun follows by itself: the
+shadow maps' static caches are keyed on its direction and drawn again, the casters outside the view
+are looked for along it (`g_cull_sun`, each frame), the mobys' key light is turned with it; the
+covered views' memory of the sky does not depend on it. Nothing needs a level reload. **Save** writes
+the level's file (its comment lines, its lights and its `noauto` lines kept; the Lights tab's unsaved
+edits too), **Reload** reads it again.
 
 ### The static shadow cache
 
@@ -535,18 +607,13 @@ are cast by the world and the mobys. Emitters and hand-placed lights fill the re
 only when a moby is within their reach, and they are cast by mobys only. These fade in and out over 8 frames as cubes are
 reassigned. Sampling uses 4 taps.
 
-## Shadow distance and the fade of far casters
+## Shadow distance
 
 **Shadow Distance** (Options > Graphics): Low, Medium, High or Maximum, 40, 80 or 140 units or as far
 as the cascades reach. It decides how far from the camera mobys cast into the sun's shadows. It does
 not affect the world, nor the point-light shadows. A moby's shadow appears without a fade at that
 distance.
 
-**The fade of far casters.** Real sun shadows from tall structures can stretch very far and look
-heavy where the original had none. For a shadowed pixel the shader reads the mean depth of the
-blockers around it (3 x 3 taps, without hardware comparison) and so knows how far the caster is. The
-shadow keeps its full strength up to 25 units from its caster and lightens to 35 % at 120 units and
-beyond. It applies to the world and the mobys.
 
 ## Ambient occlusion
 
@@ -577,11 +644,11 @@ part of the original. The editor is in the debug menu (Lights tab), so it needs 
   change the game's state: it is a debug tool.
 - Lights are saved per level in `data/lights/levelNN.txt` (relative to the working directory;
   `RAC1_LIGHTS_DIR` changes the directory), one light per line:
-  `light x y z  r g b  intensity radius flicker on`, and `noauto <class>` for an automatic class
-  turned off, with `#` for comments. Saving from the editor keeps the file's own comment lines.
+  `light x y z  r g b  intensity radius flicker on`, `noauto <class>` for an automatic class
+  turned off and `sun <azimuth> <elevation>` for the level's own sun, with `#` for comments. Saving from the editor keeps the file's own comment lines.
 - A level's file is loaded when the level's first shadow pass runs, and hand-placed lights are only
-  used with Secondary Lights set to All. The project ships the files of Gaspar and Orxon, which only
-  turn an automatic class off (see [Lights placed by hand](#lights-placed-by-hand-our-choice)).
+  used with Secondary Lights set to All (the file's sun whatever that setting). The project ships the
+  files listed in [Lights placed by hand](#lights-placed-by-hand-our-choice).
 
 ## Settings
 
@@ -602,7 +669,7 @@ The other rows take effect only when Lighting is not Original.
 For testing, environment variables override each of these (they need `--debug-tools`):
 `RAC1_SHADOWS`, `RAC1_SHADOW_RES`, `RAC1_SHADOW_MOBY_DIST`, `RAC1_POINT_SHADOWS`, `RAC1_POINTS`,
 `RAC1_AUTO_LIGHTS`, `RAC1_AO`, and finer ones such as `RAC1_SHADOW_STRENGTH`, `RAC1_SHADOW_SPLITS`,
-`RAC1_SUN_DIR`, `RAC1_SHADOW_CACHE`, `RAC1_SHADOW_FADE`, `RAC1_AO_RADIUS`, `RAC1_AO_STRENGTH`,
+`RAC1_SUN_DIR`, `RAC1_SHADOW_CACHE`, `RAC1_AO_RADIUS`, `RAC1_AO_STRENGTH`,
 `RAC1_POINT_TILES` and `RAC1_SHADOW_DEBUG` (1 shows the cascades, 2 the shadow visibility, 3 the
 point-light term alone).
 

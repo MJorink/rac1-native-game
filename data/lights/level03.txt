@@ -1,0 +1,5 @@
+# rac1-native: lights placed by hand for level 3 (the debug menu's Lights tab)
+# light x y z  r g b  intensity radius flicker on
+# Kerwan. The sun raised from the key light's 35 degrees to 50, its azimuth kept: along the first walk (the start bridge under
+# the arches, the first streets) 30 % of what faces the sun saw it, 55 % at 50 degrees. Our choice (docs/lighting.md, "The level's own sun").
+sun -3.5 50.0

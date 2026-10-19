@@ -20,3 +20,12 @@ support development:
 - **Uses ImGui freely**: that is the point.
 - May read and write EE RAM and call the hardware layer in `runtime/`. It should not call functions
   in `src/game/` that are not meant to be called from outside.
+
+## The lighting's editors
+
+- **Lights** (tab): the modern lighting's lights placed by hand and the automatic emitters' classes
+  turned off, per level, saved in `data/lights/levelNN.txt` (see
+  [Lighting: the light editor](../../docs/lighting.md#the-light-editor)).
+- **Sun** (tab): the level's own sun direction (azimuth and elevation, or the game's key light),
+  applied at once while playing; Save writes the `sun` line into the same level file, keeping its
+  comments and lights (see [Lighting: the sun editor](../../docs/lighting.md#the-sun-editor)).
