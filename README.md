@@ -130,8 +130,12 @@ game's code from it, builds the game and generates the game's data. Run it again
 ```
 
 The full guide, with requirements and troubleshooting: [Setup](docs/setup.md).
-On Windows, run `setup.cmd` instead (double-click it, or drop your disc image on it), then play with
-`play.cmd`: see [Setup](docs/setup.md#on-windows-experimental). Windows support is experimental.
+**On Windows**, the easiest way is the launcher: download `rac1-launcher.exe` from the
+[latest release](https://github.com/daino-selvatico/rac1-native-game/releases/latest), double-click it,
+click **Install** and choose your disc image. It downloads the game, builds it, keeps it up to date
+and manages your saves: see [The launcher](docs/launcher.md). (Or, from the repository's folder, run
+`setup.cmd`, then play with `play.cmd`: see [Setup](docs/setup.md#on-windows-experimental).) Windows
+support is experimental.
 
 At start the game checks, in the background, whether a newer version is out, and says so at the main menu
 (it downloads nothing; this is new and still a work in progress). That is one anonymous request to GitHub's API, no telemetry; Options > Advanced >
@@ -142,6 +146,7 @@ Update Check turns it off. See [The update check](docs/settings.md#the-update-ch
 For players:
 
 - [Setup](docs/setup.md): requirements, step by step, troubleshooting.
+- [The launcher](docs/launcher.md): the one-file installer, updater and save manager for Windows.
 - [Settings](docs/settings.md): the Graphics, Controls and Advanced pages, the Original, Modern and Experimental modes,
   the update check, where settings are kept, the debug tools.
 - [Input](docs/input.md): controllers, keyboard and mouse, rebinding.

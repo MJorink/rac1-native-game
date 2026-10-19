@@ -1,0 +1,253 @@
+// The game's folder, the launcher's settings, GitHub (the latest release, the downloads) and the first install.
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Net;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+
+namespace Rac1Launcher
+{
+    /// <summary>The launcher's own settings: %APPDATA%\rac1-native\launcher.txt, "key value" lines.</summary>
+    class Settings
+    {
+        public string GameDir = "";
+        public string Iso = "";
+        public int Jobs;  // (0: the setup's own choice)
+
+        public static string ConfigDir =>
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "rac1-native");
+        static string FilePath => Path.Combine(ConfigDir, "launcher.txt");
+
+        public static Settings Load()
+        {
+            var s = new Settings();
+            try
+            {
+                foreach (var line in File.ReadAllLines(FilePath, Encoding.UTF8))
+                {
+                    int sp = line.IndexOf(' ');
+                    if (sp < 0) continue;
+                    string k = line.Substring(0, sp), v = line.Substring(sp + 1).Trim();
+                    if (k == "game_dir") s.GameDir = v;
+                    else if (k == "iso") s.Iso = v;
+                    else if (k == "jobs") int.TryParse(v, out s.Jobs);
+                }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return s;
+        }
+
+        public void Save()
+        {
+            try
+            {
+                Directory.CreateDirectory(ConfigDir);
+                File.WriteAllText(FilePath, $"game_dir {GameDir}\r\niso {Iso}\r\njobs {Jobs}\r\n", new UTF8Encoding(false));
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>A folder with the game: its sources (a release's zip, or a clone), and what the setup made in it.</summary>
+    class GameDir
+    {
+        public readonly string Dir;
+        public GameDir(string dir) { Dir = dir; }
+
+        public string P(params string[] parts) => Path.Combine(new[] { Dir }.Concat(parts).ToArray());
+        public bool Downloaded => File.Exists(P("tools", "setup.py")) && File.Exists(P("CMakeLists.txt"));
+        public string Exe => P("build", "rac1-native.exe");
+        public bool Built => File.Exists(Exe);
+        public string Python => P(".toolchain", "msys64", "clang64", "bin", "python.exe");
+        public string ClangBin => P(".toolchain", "msys64", "clang64", "bin");
+        public string ToolchainScript => P("tools", "windows", "toolchain.ps1");
+        public bool IsGitClone => Directory.Exists(P(".git"));
+
+        /// <summary>The version of the sources (project(... VERSION) in CMakeLists.txt), or null.</summary>
+        public Version SourceVersion
+        {
+            get
+            {
+                try
+                {
+                    var m = Regex.Match(File.ReadAllText(P("CMakeLists.txt")), @"project\(\s*rac1-native\s+VERSION\s+(\d+\.\d+\.\d+)");
+                    return m.Success ? new Version(m.Groups[1].Value) : null;
+                }
+                catch (IOException) { return null; }
+            }
+        }
+
+        /// <summary>The disc image the game already uses (what the setup linked or wrote in assets\iso\), or null.</summary>
+        public string KnownIso()
+        {
+            try
+            {
+                string f = P("assets", "iso", "disc-path.txt");
+                if (File.Exists(f))
+                {
+                    string first = File.ReadAllLines(f, Encoding.UTF8).FirstOrDefault()?.Trim();
+                    if (!string.IsNullOrEmpty(first) && File.Exists(first)) return first;
+                }
+                foreach (var n in new[] { "rac1-ntsc-u.iso", "rac1-pal.iso" })
+                    if (File.Exists(P("assets", "iso", n))) return P("assets", "iso", n);
+            }
+            catch (Exception) { }
+            return null;
+        }
+
+        /// <summary>Where the launcher puts the game when it was never told: a folder of the player's own, and one
+        /// without spaces or other letters than plain ASCII where it can (the build's tools like those best).</summary>
+        public static string DefaultDir()
+        {
+            string local = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "rac1-native");
+            if (Plain(local)) return local;
+            string drive = Path.GetPathRoot(Environment.GetFolderPath(Environment.SpecialFolder.Windows)) ?? @"C:\";
+            return Path.Combine(drive, "rac1-native");
+        }
+
+        public static bool Plain(string path) => path.All(c => c < 128 && c != ' ' && c != '&' && c != '%' && c != '!');
+    }
+
+    static class GitHub
+    {
+        public const string Repo = "daino-selvatico/rac1-native-game";
+        public const string Api = "https://api.github.com/repos/" + Repo;
+        public const string Page = "https://github.com/" + Repo;
+
+        static GitHub()
+        {
+            // (TLS 1.2 and newer: older Windows 10 builds still offer TLS 1.0 by default to .NET Framework)
+            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12 | (SecurityProtocolType)12288;  // Tls13
+        }
+
+        static HttpWebRequest Request(string url)
+        {
+            var r = (HttpWebRequest)WebRequest.Create(url);
+            r.UserAgent = "rac1-native-launcher";
+            r.Accept = "application/vnd.github+json";
+            r.Timeout = 20000;
+            r.ReadWriteTimeout = 30000;
+            r.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+            return r;
+        }
+
+        public class Release
+        {
+            public string Tag = "";
+            public Version Version;
+            public string Notes = "";
+            public string LauncherUrl;  // (the release's rac1-launcher.exe, when it has one)
+        }
+
+        /// <summary>The latest release (throws when GitHub cannot be reached).</summary>
+        public static Release Latest()
+        {
+            string json;
+            using (var resp = Request(Api + "/releases/latest").GetResponse())
+            using (var rd = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                json = rd.ReadToEnd();
+            var r = new Release();
+            r.Tag = JsonString(json, "tag_name") ?? "";
+            var m = Regex.Match(r.Tag, @"(\d+)\.(\d+)\.(\d+)");
+            if (m.Success) r.Version = new Version(m.Value);
+            r.Notes = JsonString(json, "body") ?? "";
+            var a = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*/rac1-launcher\\.exe)\"");
+            if (a.Success) r.LauncherUrl = a.Groups[1].Value;
+            if (r.Tag == "") throw new InvalidDataException("GitHub's answer has no release tag");
+            return r;
+        }
+
+        /// <summary>A string field of a JSON object (the first one with this name), unescaped; null when absent.</summary>
+        static string JsonString(string json, string key)
+        {
+            var m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+            if (!m.Success) return null;
+            return Regex.Replace(m.Groups[1].Value, @"\\(u[0-9a-fA-F]{4}|.)", e =>
+            {
+                string s = e.Groups[1].Value;
+                switch (s[0])
+                {
+                    case 'n': return "\n";
+                    case 'r': return "\r";
+                    case 't': return "\t";
+                    case 'u': return ((char)Convert.ToInt32(s.Substring(1), 16)).ToString();
+                    default: return s;
+                }
+            });
+        }
+
+        /// <summary>Downloads url into file; progress(bytes so far, total or -1).</summary>
+        public static void Download(string url, string file, Action<long, long> progress, CancellationToken cancel)
+        {
+            var req = Request(url);
+            req.Accept = "*/*";
+            using (var resp = (HttpWebResponse)req.GetResponse())
+            using (var src = resp.GetResponseStream())
+            using (var dst = File.Create(file))
+            {
+                long total = resp.ContentLength, done = 0;
+                var buf = new byte[1 << 16];
+                int n;
+                while ((n = src.Read(buf, 0, buf.Length)) > 0)
+                {
+                    cancel.ThrowIfCancellationRequested();
+                    dst.Write(buf, 0, n);
+                    done += n;
+                    progress(done, total);
+                }
+            }
+        }
+    }
+
+    static class Install
+    {
+        /// <summary>Unpacks a release's source zip (GitHub's: one top folder) into dir, and records what it unpacked as
+        /// tools\setup.py --update does (assets\update-version.txt for the version the game shows, and the files'
+        /// hashes, so a later update removes the files a new version no longer has).</summary>
+        public static void Unpack(string zip, string dir, string tag, Action<string> log)
+        {
+            var hashes = new SortedDictionary<string, string>(StringComparer.Ordinal);
+            using (var za = ZipFile.OpenRead(zip))
+            using (var sha = SHA256.Create())
+            {
+                foreach (var e in za.Entries)
+                {
+                    string name = e.FullName.Replace('\\', '/');
+                    int slash = name.IndexOf('/');
+                    if (slash < 0) continue;
+                    string rel = name.Substring(slash + 1);
+                    if (rel == "" || rel.EndsWith("/")) continue;
+                    string top = rel.Split('/')[0];
+                    if (top == ".git" || top == ".toolchain" || top == "assets" || top == "build") continue;
+                    string dst = Path.GetFullPath(Path.Combine(dir, rel.Replace('/', Path.DirectorySeparatorChar)));
+                    if (!dst.StartsWith(Path.GetFullPath(dir), StringComparison.OrdinalIgnoreCase)) continue;
+                    Directory.CreateDirectory(Path.GetDirectoryName(dst));
+                    e.ExtractToFile(dst, true);
+                    if (!rel.Contains("__pycache__"))
+                        hashes[rel] = BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(dst))).Replace("-", "").ToLowerInvariant();
+                }
+            }
+            log($"Unpacked {hashes.Count} files.");
+            string assets = Path.Combine(dir, "assets");
+            Directory.CreateDirectory(assets);
+            File.WriteAllText(Path.Combine(assets, "update-version.txt"), $"describe {tag}\ncommit \nbranch \n", Encoding.ASCII);
+            string state = Path.Combine(assets, "setup-state.json");
+            if (!File.Exists(state))
+            {
+                var sb = new StringBuilder("{\n  \"source_hashes\": {\n");
+                sb.Append(string.Join(",\n", hashes.Select(kv => $"    \"{JsonEscape(kv.Key)}\": \"{kv.Value}\"")));
+                sb.Append("\n  }\n}\n");
+                File.WriteAllText(state, sb.ToString(), new UTF8Encoding(false));
+            }
+        }
+
+        static string JsonEscape(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    }
+}

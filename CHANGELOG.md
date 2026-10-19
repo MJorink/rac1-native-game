@@ -3,6 +3,18 @@
 What changed in each release. Releases are source only: you build the game with `./setup.sh`
 (`setup.cmd` on Windows) from your own disc. Issue numbers refer to this repository's issues.
 
+## Unreleased
+
+### Windows
+- **The launcher**, `rac1-launcher.exe`: one file to download and double-click, attached to each
+  release. It downloads the game, sets it up from your disc image, updates it (and itself), starts
+  it, and backs up, restores and deletes saves. See [The launcher](docs/launcher.md).
+- The setup no longer fails downloading GLFW with "error adding trust anchors" when the game's
+  folder has a space in its path (#79, #69, #63): MSYS2's certificate files, left empty by its
+  CLANG64 tool there, are made again by `tools\windows\toolchain.ps1` (also on a setup made before).
+- A code generation job whose Python crashes ("Fatal Python error", #72) is run once more on its own.
+- A clearer message when the program disappears after the build (an antivirus removing it, #69).
+
 ## 0.4.0
 
 Bug fixes from the 0.3.0 reports, and almost all of the game's code is now ported: of the code the

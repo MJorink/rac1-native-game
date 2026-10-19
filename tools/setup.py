@@ -105,6 +105,9 @@ def enable_windows_colors():
 
 
 USE_COLOR = sys.stdout.isatty() and (not WINDOWS or enable_windows_colors())
+# Run by the launcher (tools/launcher/, RAC1_LAUNCHER=1): the progress also as lines of their own that it reads,
+# "@step <n> <total> <message>" and "@progress <percent>" (it shows them as its progress bar, not as text)
+LAUNCHER = os.environ.get("RAC1_LAUNCHER") == "1"
 
 
 def disable_windows_quick_edit():
@@ -135,7 +138,18 @@ def color(code, text):
 
 
 def step(n, total, msg):
+    if LAUNCHER:
+        print(f"@step {n} {total} {msg}", flush=True)
     print("\n" + color("1;36", f"[{n}/{total}] {msg}"), flush=True)
+
+
+def progress(done, total):
+    """For the launcher: how far the current step is (a percent line, when it changed)."""
+    if LAUNCHER and total:
+        pct = min(100, done * 100 // total)
+        if pct != getattr(progress, "last", None):
+            progress.last = pct
+            print(f"@progress {pct}", flush=True)
 
 
 def ok(msg):
@@ -529,7 +543,8 @@ def generate_code(iso, jobs):
         for line in proc.stdout:
             log.write(line)
             if re.match(r"\S+:\S+\s+(ok|FAIL)\s", line):
-                done += 1
+                done = min(done + 1, units)  # (a unit run again prints a second line)
+                progress(done, units)
                 if USE_COLOR:
                     print(f"\r   {done}/{units}", end="", flush=True)
         rc = proc.wait()
@@ -654,9 +669,11 @@ def run_logged(cmd, log):
                 n = re.match(r"\[(\d+)/(\d+)\]", line)
                 if n:
                     m = re.match(r"(\d+)", str(int(n.group(1)) * 100 // max(1, int(n.group(2)))))
-            if m and m.group(1) != shown and USE_COLOR:
+            if m and m.group(1) != shown:
                 shown = m.group(1)
-                print(f"\r  {shown:>3}%", end="", flush=True)
+                progress(int(shown), 100)
+                if USE_COLOR:
+                    print(f"\r  {shown:>3}%", end="", flush=True)
         if USE_COLOR and shown:
             print()
         if proc.wait() == 0:
@@ -685,7 +702,11 @@ def build(jobs):
     if not run_logged(["cmake", "--build", str(BUILD_DIR), "-j", str(jobs)], BUILD_LOG):
         fail("The build failed (see above).")
     if not EXE.exists():
-        fail(f"{EXE} is missing after the build.")
+        # (the build ran to the end: the program was made, then removed, which is what an antivirus does with a new
+        # program it does not know; GitHub issue #69)
+        fail(f"{EXE} is missing after the build, although the build finished.\n"
+             "         An antivirus (Windows Security too) may have removed it: look in its protection history, allow\n"
+             f"         the file (or exclude this folder: {ROOT}), then run {SETUP_CMD} again.")
     ok(f"Built {EXE.relative_to(ROOT)}")
 
 
@@ -782,8 +803,12 @@ def setup_due():
 
 def game_env():
     """The environment the game's setup mode runs in: on Windows, the Python it runs the overlay matcher with
-    (src/platform/platform_win32.cpp) is this one."""
-    return dict(os.environ, RAC1_PYTHON=sys.executable) if WINDOWS else None
+    (src/platform/platform_win32.cpp) is this one. (RAC1_LAUNCHER is the setup's, not the game's: the game would
+    report it as an unknown testing switch.)"""
+    env = {k: v for k, v in os.environ.items() if k != "RAC1_LAUNCHER"}
+    if WINDOWS:
+        env["RAC1_PYTHON"] = sys.executable
+    return env
 
 
 # --- 6. Updating (--update, GitHub issue #13) ---------------------------------------------------

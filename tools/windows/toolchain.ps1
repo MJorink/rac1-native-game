@@ -104,4 +104,36 @@ if ($missing) {
     }
     Update-Keyring
 }
+
+# The certificates CLANG64's programs check HTTPS with (CMake downloading GLFW, Python's update check): its
+# ca-certificates package makes them with CLANG64's p11-kit, which breaks in a folder with a space in its path (it
+# runs its trust tool by a path cut at the space) and leaves the files empty: "error adding trust anchors" at the
+# build's first download (GitHub issues #79, #69, #63). MSYS2's own p11-kit has no such problem: the files are made
+# with it when they are missing or empty (also repairing a setup made before this check).
+$ssl = Join-Path $Msys 'clang64\etc\ssl'
+$bundles = @((Join-Path $ssl 'cert.pem'), (Join-Path $ssl 'certs\ca-bundle.crt'),
+             (Join-Path $Msys 'clang64\etc\pki\ca-trust\extracted\pem\tls-ca-bundle.pem'))
+if ($bundles | Where-Object { -not (Test-Path $_) -or (Get-Item $_).Length -lt 1024 }) {
+    Step 'Preparing the certificates for the downloads'
+    $out = '/clang64/etc/pki/ca-trust/extracted'
+    $cmd = "mkdir -p $out/pem $out/openssl /clang64/etc/ssl/certs && " +
+           "/usr/bin/p11-kit extract --format=pem-bundle --filter=ca-anchors --overwrite --comment --purpose server-auth $out/pem/tls-ca-bundle.pem && " +
+           "/usr/bin/p11-kit extract --format=openssl-bundle --filter=certificates --overwrite --comment $out/openssl/ca-bundle.trust.crt && " +
+           "cp -f $out/pem/tls-ca-bundle.pem /clang64/etc/ssl/certs/ca-bundle.crt && " +
+           "cp -f $out/pem/tls-ca-bundle.pem /clang64/etc/ssl/cert.pem && " +
+           "cp -f $out/openssl/ca-bundle.trust.crt /clang64/etc/ssl/certs/ca-bundle.trust.crt"
+    Invoke-Msys $cmd | Out-Null
+    if ($bundles | Where-Object { -not (Test-Path $_) -or (Get-Item $_).Length -lt 1024 }) {
+        # (MSYS2's own bundle, which pacman downloads with, as the last resort)
+        $own = Join-Path $Msys 'usr\ssl\certs\ca-bundle.crt'
+        if ((Test-Path $own) -and (Get-Item $own).Length -ge 1024) {
+            foreach ($b in $bundles) {
+                New-Item -ItemType Directory -Force (Split-Path -Parent $b) | Out-Null
+                Copy-Item -Force $own $b
+            }
+        } else {
+            Fail 'The certificates for the downloads could not be made. Delete the .toolchain folder, then run the setup again.'
+        }
+    }
+}
 exit 0
