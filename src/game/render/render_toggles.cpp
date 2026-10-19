@@ -24,6 +24,5 @@ int g_render_shade = std::getenv("RAC1_RENDER_SHADE") != nullptr ? std::atoi(std
 float g_render_aspect = 640.0f / 480.0f;
 int g_view_mode = 0;
 float g_view_frame_aspect = 4.0f / 3.0f;
-int g_view_overscan_crop = 0;
 
 } // namespace rac1

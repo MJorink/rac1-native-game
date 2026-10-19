@@ -2674,12 +2674,17 @@ int main(int argc, char** argv) {
             fd.gv.xscale = 1.0f / g_view_widen;
             fd.fb_w = static_cast<float>(lhu(0x001518d0));
             fd.fb_h = static_cast<float>(lhu(0x001518d2));
-            render_overscan_crop(fd.fb_w, fd.fb_h, fd.gv.crop);  // the 2D cut to a TV's area, or the full frame
+            render_overscan_crop(fd.fb_w, fd.fb_h, fd.gv.crop);  // the full frame (testing: RAC1_OVERSCAN cuts the 2D to a TV's area)
             // the glyphs' sampling inside their own cells (no neighbouring glyphs' lines around the letters, issue #76): the modern
             // view's; the faithful reference (RAC1_MRP=0) samples as the GS. (testing: RAC1_SPRITE_CLAMP=0 / 1 decides)
             {
                 static const char* s_sc = std::getenv("RAC1_SPRITE_CLAMP");
                 fd.gv.sprite_clamp = s_sc != nullptr ? std::atoi(s_sc) != 0 : g_moby_renderer == MobyRenderer::kMrp;
+                // the 2D slivers the game parks at the frame's edges (a HUD element hiding: its 3 leftmost columns for 16 frames,
+                // which a TV's overscan hid) not drawn, now that the full frame is always shown: the modern view's; the faithful
+                // reference draws all the GS drew. (testing: RAC1_EDGE_SLIVERS=1 draws them, 0 hides them)
+                static const char* s_es = std::getenv("RAC1_EDGE_SLIVERS");
+                fd.gv.hide_edge_slivers = s_es != nullptr ? std::atoi(s_es) == 0 : g_moby_renderer == MobyRenderer::kMrp;
             }
             // the frame's page: FRAME_1 of the draw environment the frame's fixed packet 0x13cf10
             // sets (render_passes.cpp), the screen even when sampled (the drop shadows' alpha)

@@ -112,7 +112,7 @@ nothing, so an object whose class is not ported stands still or does not appear.
 | Sound and music (989snd), dialogue streams, movies | Working; see [Audio](audio.md). The sound mirror that keeps music playing through loads is still a proposal (see [Decisions](decisions.md#13-the-iops-sound-runs-twice)). |
 | 3D rendering (the MRP) | The default renderer; see [Rendering](rendering.md). |
 | Modern lighting (optional) | Working, off by default; see [Lighting](lighting.md). |
-| Options > Graphics (including Texture Detail and Overscan, the 2D cut to a TV's area), Controls, Advanced; the Original / Modern / Experimental choice at New Game | Implemented, known issues may remain; see [Settings](settings.md). |
+| Options > Graphics (including Texture Detail), Controls, Advanced; the Original / Modern / Experimental choice at New Game | Implemented, known issues may remain; see [Settings](settings.md). |
 | Keyboard, mouse and controller mapping, remapping in Options > Controls | Implemented, known issues may remain; see [Input](input.md). |
 | Debug tools behind `--debug-tools` | Implemented; see [Settings](settings.md#debug-tools). |
 

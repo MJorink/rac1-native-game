@@ -293,8 +293,13 @@ Before this, the game's state diverged on most frames of the Veldin intro when t
 after it, its state is identical at 4:3 and at 5120x1440.
 
 The HUD and the menus stay 4:3 in the middle of the screen; full-screen 2D such as fades reaches the
-edges. Options > Graphics > Overscan (TV, the default) hides a 4-pixel strip of the 2D at the frame's
-left, right and top edges, as a TV did; it never cuts the 3D, fades or the edge fills.
+edges. The whole frame is shown, as the PS2 drew it, with one exception: a HUD element hiding parks its
+3 leftmost columns at the frame's right edge for 16 frames (the Suck Cannon's gauge and the air meter, the
+game's own `hud_plain_update` 0x235ea0), which a TV's overscan hid and which in widescreen sits inside the
+picture; the modern view does not draw such slivers (a textured 2D primitive with at most 4 frame pixels
+inside the frame, the rest past its left, right or top edge; `RAC1_EDGE_SLIVERS=1` draws them, the faithful
+reference always does). `RAC1_OVERSCAN` (testing) can still hide a 4-pixel strip of the 2D at the frame's
+left, right and top edges as a TV did; it never cuts the 3D, fades or the edge fills.
 
 **Render scale** (Options > Graphics > Render Resolution, 50 % to 200 %): the world and the mobys are
 drawn into an off-screen buffer at that fraction of the window's resolution, then scaled to the

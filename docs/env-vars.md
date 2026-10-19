@@ -1,12 +1,12 @@
 # Environment variables
 
-rac1-native reads a number of `RAC1_*` environment variables. This page lists all of them: 294 in
+rac1-native reads a number of `RAC1_*` environment variables. This page lists all of them: 295 in
 total, in three groups.
 
 | Group | Count | Who it is for |
 |---|---|---|
 | [Player](#player-variables) | 18 | Settings a player may want to change: files, window, audio, the ISO |
-| [Debugging](#debugging-variables) | 218 | Developers: profilers, overlays, switching a renderer or an optimisation on or off to compare |
+| [Debugging](#debugging-variables) | 219 | Developers: profilers, overlays, switching a renderer or an optimisation on or off to compare |
 | [Automated testing](#automated-testing-variables) | 58 | Scripted and headless runs: frame counts, screenshots, simulated input, self-checks |
 
 The oracle (`build/tests/ovl_oracle`) reads variables of its own (`ORACLE_*`, `RAC1_ORACLE_DUMPS`): see
@@ -76,6 +76,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_CARD_LOG` | set (any value) = on; default off | Prints a line whenever the memory card screens or machines change state (UI state, flags, level, slot, owned items, bolts). |
 | `RAC1_CHAIN_LOG` | set (any value) = on; default off | Every host frame prints the address range of the graphics DMA chain that is walked and whether it runs. |
 | `RAC1_DEVICE_DUMP` | file path; unset = no dump | Writes what the audio device is given, as played (raw 48 kHz signed 16-bit PCM, the device's channels): the queue's skips, underruns and the IOP's frames played alone are in it, to look for clicks; unlike RAC1_AUDIO_DUMP (the game's IOP's output). |
+| `RAC1_EDGE_SLIVERS` | 0 = hidden, 1 = drawn; default hidden with the modern renderer, drawn with the faithful one (RAC1_MRP=0) | The 2D slivers the game leaves at the frame's edges: a textured 2D primitive with at most 4 frame pixels inside the frame and the rest past its left, right or top edge (the Suck Cannon's gauge and the air meter keep their 3 leftmost columns at the right edge for 16 frames as they hide, which a TV's overscan hid). Set it to 1 to see everything the game draws. |
 | `RAC1_EMIT_MAX_SHARE` | fraction 0 to 1; default 0.35 | The modern lighting's automatic emitters: a warm-coloured class glowing over more than this share of its surface is taken as a bright material, not a lamp. |
 | `RAC1_FADE_LOG` | set (any value) = on; default off | Prints the frames of the game's blocking loops (fades and waits) as they run. |
 | `RAC1_FPU_NEAREST` | 1 = host round-to-nearest; default off (round toward zero as the PS2) | Turns off the PS2-style float rounding so the host's normal rounding is used, only to compare behaviour. |
@@ -173,7 +174,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_MRP_WIDEN_LISTS` | 0 = off; default on | Switches off the widening of the draw lists' callbacks (the levels' water, lava and sand-sea surfaces, culled against the 4:3 clip matrix) at the sides of a widened view, to compare. |
 | `RAC1_MRP_WIDEN_TERMS` | 0 = off; default on | Switches off the widening of the other frustum tests the draw lists' callbacks make in a widened view (the point test 0x2002e0 that the water, lava and sand-sea grids cull their cells with, the quad drawer's reject of quads past the sides), as before, to compare. |
 | `RAC1_MUSIC_TRACE` | set (any value) = on; default off | Prints the music streams' state (sequence step, tracks, music and dialogue slots) each frame it changes. |
-| `RAC1_OVERSCAN` | 0 = full frame, 1 = the TV's area, or `left,right,top,bottom` in pixels; unset = the Graphics page's Overscan row | Overrides the 2D overscan crop. |
+| `RAC1_OVERSCAN` | 0 = full frame, 1 = the TV's area, or `left,right,top,bottom` in pixels; unset = the full frame | Cuts the frame's 2D to a TV's area (the overscan crop), to compare. The game always shows the full frame. |
 | `RAC1_OWN_OVERLAY` | 0 = run every level on Veldin's overlay image; anything else or unset = each level on its own overlay | For comparison, makes every level run on the first level's overlay instead of its own. |
 | `RAC1_PACE_GAME` | 0 = off; default on | When the frame cap is set, also paces the game to 60 Hz times the speed factor. Setting 0 stops the game loop being held to that rate; for timing comparisons. |
 | `RAC1_PACING` | 0 = the older pacing; default the current frame pacer | Switches the host frame pacer back to the older legacy mode, to compare. |

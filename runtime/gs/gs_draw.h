@@ -43,6 +43,11 @@ struct Viewport {
     // screen (not the projected 3D, not a render target, not the 2D covering the frame's whole width or height: fades,
     // darkenings, the letterbox) is cut at these margins, in the game's frame pixels (left, right, top, bottom); 0: the full frame
     int crop[4] = {0, 0, 0, 0};
+    // (the modern view; off for the faithful reference) the 2D slivers at the frame's edges not drawn: a textured 2D primitive
+    // of which at most 4 frame pixels are inside the frame, the rest past its left, right or top edge (a HUD element parked
+    // there as it hides: the Suck Cannon's gauge and the air meter keep their 3 leftmost columns at x 509..511 for 16 frames,
+    // which a TV's overscan hid). Not the projected 3D, render targets, untextured fills (a wipe's pieces), the full-span 2D
+    bool hide_edge_slivers = false;
     // (the modern view; off for the faithful reference) a font's glyph samples only the texels of its own cell: its bilinear
     // filtering, scaled up, no longer blends in the texels beyond it, the neighbouring glyphs (issue #76; see draw())
     bool sprite_clamp = false;
