@@ -39,6 +39,8 @@ class BlockSoundHandler : public SoundHandler {
   void Stop() override;
   u8 Group() override { return m_group; };
   void SetVolPan(s32 vol, s32 pan) override;
+  void AutoPan(s32 pan, s32 dir, s32 delta_time, s32 mode) override;
+  void ApplyVolPan(s32 vol, s32 pan, bool cancel_autopan);
   void SetPMod(s32 mod) override;
   void SetRegister(u8 reg, u8 value) override { m_registers.at(reg) = value; };
   void SetPBend(s32 bend) override;
@@ -79,6 +81,10 @@ class BlockSoundHandler : public SoundHandler {
   s32 m_app_pan{0};
   s32 m_app_pm{0};
   s32 m_app_pb{0};
+  s32 m_autopan_target{0};
+  s32 m_autopan_pos{0};
+  s32 m_autopan_step{0};
+  s32 m_autopan_ticks{0};
 
   s32 m_lfo_volume{0};
   s32 m_lfo_pan{0};

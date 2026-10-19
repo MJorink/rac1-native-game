@@ -98,9 +98,12 @@ int32_t command(Iop& io, uint32_t id, const uint32_t* a) {
         return static_cast<int32_t>(p.PlaySound(b, a[1], s(2), s(3), s(4), s(5)));
     }
     case 0x21: {
-        const uint32_t h = a[0], f = a[1];
+        const uint32_t h = a[0];
+        uint32_t f = a[1];
         if (!p.SoundStillActive(h)) return 0;
-        if ((f & 7) != 0) p.SetSoundVolPan(static_cast<s32>(h), (f & 1) ? s(2) : snd::VOLUME_DONT_CHANGE, (f & 6) ? s(3) : snd::PAN_DONT_CHANGE);
+        if ((f & 6) == 6) f &= ~2u;
+        if ((f & 3) != 0) p.SetSoundVolPan(static_cast<s32>(h), (f & 1) ? s(2) : snd::VOLUME_DONT_CHANGE, (f & 2) ? s(3) : snd::PAN_DONT_CHANGE);
+        if ((f & 4) != 0) p.AutoPan(static_cast<s32>(h), s(3), 0, 0x1e, 4);  // (0xb4c4: snd_AutoPan(h, pan, 0, 30, 4))
         if ((f & 8) != 0) p.SetSoundPmod(static_cast<s32>(h), s(4));
         if ((f & 0x10) != 0) p.SetSoundPBend(static_cast<s32>(h), s(5));
         return static_cast<int32_t>(h);
@@ -114,6 +117,16 @@ int32_t command(Iop& io, uint32_t id, const uint32_t* a) {
     case 0x18: p.StopAllSounds(); return 0;
     case 0x09: p.SetMasterVolume(a[0], s(1)); return 0;
     case 0x0b: p.SetPlaybackMode(s(0)); return 0;
+    case 0x0d: return 0;  // snd_SetMixerMode
+    case 0x10:
+        p.AutoReverb(static_cast<s16>(s(1)), s(2), s(3));
+        return 0;
+    case 0x4e: return 0;  // snd_SetGroupVoiceRange
+    case 0x50:
+        p.SetReverbMode(s(1), s(3), s(4));
+        p.SetReverbDepth(static_cast<s16>(s(2)), static_cast<s16>(s(2)));
+        return 0;
+    case 0x51: return 0;  // snd_SetPanMode
     case 0x06: {
         snd::BankHandle b = bank_of(io, a[0]);
         if (b != nullptr) p.UnloadBank(b);

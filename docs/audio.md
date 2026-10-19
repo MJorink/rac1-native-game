@@ -42,6 +42,25 @@ driver, a sound id the bank does not have plays nothing (the game asks for some:
 hero's low-air beep is sound -1); the first time an id is refused it is reported on the console.
 `runtime/iop/snd989_stream.cpp` plays the streamed music and dialogue, read from the disc.
 
+**Reverb.** Each level's light zones carry a reverb setting: when the hero enters one, the game's sound
+frame (`sound_frame`, 0x28cc08) sends command 0x50 (`snd_SetReverbEx`: core, type, depth, delay, feedback)
+or 0x10 (`snd_AutoReverb`: core, depth, time, channels), and 0x50 with type 0 to turn it off (Veldin).
+The synth runs the SPU2's reverb (the effect area's same-side / different-side reflections, four combs and
+two all-pass filters, at 24 kHz) with the SDK's presets (room, studio A / B / C, hall, space, echo, delay,
+pipe); its output, scaled by the depth (the SPU2's effect volume), is added to the mix. The voices that feed
+it are those whose tone has the reverb flag (0x1), or plays only into the reverb (0x10).
+
+**Pan and pitch.** Command 0x21 (`snd_SetSoundParams`, 0xb428) with flag 4 moves a sound's pan with
+`snd_AutoPan` (over handler ticks, the shortest way) instead of jumping, as the IRX does for the world's
+positional sounds; flag 2 alone sets it at once. Commands 0x0d (`snd_SetMixerMode`), 0x4e
+(`snd_SetGroupVoiceRange`) and 0x51 (`snd_SetPanMode`) are accepted and do nothing (the host has no SPU2
+cores or voice numbers). The voices' fixed volume changes are ramped over 400 samples (8.3 ms) on the host, so the per-frame
+updates do not click; pitch changes apply at once, as on the SPU2 (a ramp made sounds end a frame early,
+which the game polls).
+
+**The mix.** The voices are summed in 32 bits and the result clamped to 16 bits once, then the master
+volume applied: the SPU2's own output is 16-bit, and sums past full scale clip there too.
+
 **Timing.** Everything the game reads back from the sound must depend only on the game's own time,
 not the PC's speed. So the IOP's driver advances exactly 800 samples (1/60 s at 48 kHz) each time a
 vsync passes in the game (`vsync_passed` in `src/host/orig_main.cpp`), on the game's thread. The

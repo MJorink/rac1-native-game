@@ -95,6 +95,7 @@ class Volume : Envelope {
  public:
   void Run();
   void Set(u16 volume);
+  void Snap();
   [[nodiscard]] u16 Get() const;
   [[nodiscard]] s16 GetCurrent() const;
 
@@ -103,6 +104,11 @@ class Volume : Envelope {
 
     m_Counter = 0;
     m_Level = 0;
+    m_TargetLevel = 0;
+    m_SmoothFixed = 0;
+    m_SmoothStep = 0;
+    m_SmoothLeft = 0;
+    m_Primed = false;
     m_Exp = false;
     m_Decrease = false;
     m_Inv = false;
@@ -112,6 +118,11 @@ class Volume : Envelope {
 
  private:
   VolReg m_Sweep{0};
+  s32 m_TargetLevel{0};
+  s32 m_SmoothFixed{0};
+  s32 m_SmoothStep{0};
+  s32 m_SmoothLeft{0};
+  bool m_Primed{false};
 };
 
 struct VolumePair {
@@ -121,6 +132,11 @@ struct VolumePair {
   void Run() {
     left.Run();
     right.Run();
+  }
+
+  void Snap() {
+    left.Snap();
+    right.Snap();
   }
 
   void Reset() {

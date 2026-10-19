@@ -123,20 +123,61 @@ s16 ADSR::Level() const {
 }
 
 void Volume::Run() {
-  if (!m_Sweep.EnableSweep.get())
+  if (!m_Sweep.EnableSweep.get()) {
+    if (m_SmoothLeft > 0) {
+      m_SmoothFixed += m_SmoothStep;
+      if (--m_SmoothLeft <= 0) {
+        m_Level = m_TargetLevel;
+        m_SmoothFixed = m_TargetLevel << 10;
+      } else {
+        m_Level = std::clamp<s32>(m_SmoothFixed >> 10, INT16_MIN, INT16_MAX);
+      }
+    }
     return;
+  }
 
   Step();
+}
+
+void Volume::Snap() {
+  if (!m_Sweep.EnableSweep.get()) {
+    m_Level = m_TargetLevel;
+    m_SmoothFixed = m_TargetLevel << 10;
+    m_SmoothStep = 0;
+    m_SmoothLeft = 0;
+  }
 }
 
 void Volume::Set(u16 volume) {
   m_Sweep.bits = volume;
 
   if (!m_Sweep.EnableSweep.get()) {
-    m_Level = static_cast<s16>(m_Sweep.bits << 1);
+    const s32 target = static_cast<s16>(m_Sweep.bits << 1);
+    if (!m_Primed) {
+      m_Primed = true;
+      m_TargetLevel = target;
+      m_Level = target;
+      m_SmoothFixed = target << 10;
+      m_SmoothStep = 0;
+      m_SmoothLeft = 0;
+    } else if (target == m_TargetLevel) {
+      return;
+    } else if (target == m_Level) {
+      m_TargetLevel = target;
+      m_SmoothFixed = target << 10;
+      m_SmoothStep = 0;
+      m_SmoothLeft = 0;
+    } else {
+      m_TargetLevel = target;
+      constexpr s32 kSmoothSamples = 400;  // 1/120 s (~8.3 ms) at 48 kHz
+      m_SmoothFixed = m_Level << 10;
+      m_SmoothLeft = kSmoothSamples;
+      m_SmoothStep = ((target << 10) - m_SmoothFixed) / kSmoothSamples;
+    }
     return;
   }
 
+  m_SmoothLeft = 0;
   m_Exp = m_Sweep.SweepExp.get();
   m_Decrease = m_Sweep.SweepDecrease.get();
   m_Shift = m_Sweep.SweepShift.get();
