@@ -25,15 +25,18 @@ layout (location = 1) in vec4 aColor;
 layout (location = 2) in vec3 aTex;
 layout (location = 3) in float aDepth;
 layout (location = 4) in float aFog;
+layout (location = 5) in vec4 aClamp;
 uniform vec2 uFb;
 uniform int uRt;
 uniform float uScaleX;
 out vec4 vColor;
 out vec3 vTex;
 out float vFog;
+flat out vec4 vClamp;
 void main() {
     vColor = aColor;
     vFog = aFog;
+    vClamp = aClamp;
     vTex = aTex;
     // a render target: its row 0 at the texture's row 0 (sampled later)
     float y = uRt != 0 ? aPos.y / uFb.y * 2.0 - 1.0 : 1.0 - aPos.y / uFb.y * 2.0;
@@ -47,6 +50,8 @@ const char* FS = R"(
 in vec4 vColor;
 in vec3 vTex;
 in float vFog;
+// a glyph's sampling kept inside its own cell (Viewport::sprite_clamp): s, t clamped to xy..zw (x > z: none)
+flat in vec4 vClamp;
 uniform sampler2D uTexture;
 // the fogging (testing, RAC1_GS_FOG=1): PRIM FGE with FOGCOL and the vertices' F bytes
 uniform int uFge;
@@ -89,6 +94,7 @@ void main() {
                 int level = lod <= 0.0 ? 0 : min(int(floor(lod + 0.5)), uMipMxl);
                 idx = clamp(level - uMipLo, 0, uMipN);
             }
+            if (vClamp.x <= vClamp.z) st = clamp(st, vClamp.xy, vClamp.zw);
             if (idx == 0) t = texture(uTexture, st);
             else if (idx == 1) t = texture(uMip1, st);
             else if (idx == 2) t = texture(uMip2, st);
@@ -229,6 +235,7 @@ struct V {
     float s, t, q;
     float d;  // window depth (0.5 without depth)
     float f;  // the vertex's fog byte (XYZF2's F)
+    float c0 = 1.0f, c1 = 1.0f, c2 = 0.0f, c3 = 0.0f;  // a glyph's sampling clamp (s0, t0, s1, t1; s0 > s1: none)
 };
 struct DrawLocs {
     GLint fb = -1, rt = -1, scale_x = -1, fge = -1, fog_col = -1;
@@ -335,6 +342,8 @@ void draw_init() {
     glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(V), reinterpret_cast<void*>(6 * sizeof(float)));
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(V), reinterpret_cast<void*>(9 * sizeof(float)));
     glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(V), reinterpret_cast<void*>(10 * sizeof(float)));
+    glVertexAttribPointer(5, 4, GL_FLOAT, GL_FALSE, sizeof(V), reinterpret_cast<void*>(11 * sizeof(float)));
+    glEnableVertexAttribArray(5);
     glEnableVertexAttribArray(3);
     glEnableVertexAttribArray(4);
     glEnableVertexAttribArray(0);
@@ -624,6 +633,55 @@ void draw(const Gs& gs, int win_w, int win_h, float FB_W, float FB_H, const Dept
             verts = {mk(p.v[0]), mk(p.v[1])};
         }
         if (verts.empty()) continue;
+        // (the modern view, Viewport::sprite_clamp) a glyph's bilinear sampling kept inside its own cell of the font's texture. At the
+        // GS's own resolution a glyph drawn 1:1 samples its texels' centres and never reads past its cell; scaled up, its outer half
+        // texel blends with the texels beyond it, the neighbouring glyphs' edges in the atlas: thin lines under, over and through the
+        // letters (issue #76; the CLAMP region 0x1fa648 sets includes the row and the column past the cell, and 0x1fa290 sets none).
+        // The glyphs are triangle strips (two triangles, each with the cell's texture box) or sprites: a rectangle on the screen whose
+        // texture coordinates follow x and y apart (u from x, v from y), so its texture box is the cell it shows, kept whole.
+        if (v.sprite_clamp && tme && !scr_tex && p.mip_n == 0 && !p.vu && (p.type == 6 || (p.type == 3 && fst))) {
+            bool rect = p.type == 6;
+            if (!rect) {  // a triangle: its corners on its screen box's corners, u the same where x is, v where y is (half of a rectangle)
+                const auto& q = p.v;
+                float bx0 = q[0].x, bx1 = bx0, by0 = q[0].y, by1 = by0;
+                for (int i = 1; i < 3; ++i) {
+                    bx0 = std::min(bx0, q[i].x);
+                    bx1 = std::max(bx1, q[i].x);
+                    by0 = std::min(by0, q[i].y);
+                    by1 = std::max(by1, q[i].y);
+                }
+                rect = bx1 > bx0 && by1 > by0;
+                for (int i = 0; i < 3 && rect; ++i) {
+                    rect = (q[i].x == bx0 || q[i].x == bx1) && (q[i].y == by0 || q[i].y == by1);
+                    for (int j = i + 1; j < 3 && rect; ++j) rect = (q[i].x == q[j].x) == (q[i].u == q[j].u) && (q[i].y == q[j].y) == (q[i].v == q[j].v);
+                }
+            }
+            // the box in texels (s / q of the sampled texture)
+            float s0 = 1e30f, s1 = -1e30f, t0 = 1e30f, t1 = -1e30f;
+            for (const V& q : verts) {
+                s0 = std::min(s0, q.s / q.q * sw);
+                s1 = std::max(s1, q.s / q.q * sw);
+                t0 = std::min(t0, q.t / q.q * sh);
+                t1 = std::max(t1, q.t / q.q * sh);
+            }
+            // only a font's glyph cell: 16 x 16 texels (24 x 16, the wide glyphs: the buttons' symbols) at whole texels, as both glyph
+            // drawers make them (0x1fa648, 0x1fa290). The other 2D (the menus' panels and their highlights, pictures, the HUD) keeps the
+            // GS's sampling: there the texels past a piece's edge are the rest of the same picture, and clamped, the panels' edges changed
+            auto whole = [](float x) { return std::abs(x - std::round(x)) < 1.0f / 32.0f; };
+            const float cw = s1 - s0, ch = t1 - t0;
+            rect = rect && whole(s0) && whole(t0) && std::abs(ch - 16.0f) < 1.0f / 32.0f &&
+                   (std::abs(cw - 16.0f) < 1.0f / 32.0f || std::abs(cw - 24.0f) < 1.0f / 32.0f);
+            if (rect) {  // the clamp at the centres of the cell's outer texels
+                const float sl = (std::round(s0) + 0.5f) / sw, sr = (std::round(s1) - 0.5f) / sw;
+                const float tl = (std::round(t0) + 0.5f) / sh, tr = (std::round(t1) - 0.5f) / sh;
+                for (V& q : verts) {
+                    q.c0 = sl;
+                    q.c1 = tl;
+                    q.c2 = sr;
+                    q.c3 = tr;
+                }
+            }
+        }
         // a 2D sprite / triangle that covers none of the GS's sample points draws nothing on the GS: it samples each pixel at its
         // integer coordinates (pixel x covered when x0 <= x < x1, the "top-left" rule), GL at the pixel's centre (x + 0.5), so a
         // primitive whose part inside the scissor is within [511.5, 512) - the oxygen indicator's frame parked off the frame at x = 512,

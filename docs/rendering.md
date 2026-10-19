@@ -319,6 +319,10 @@ and flashes, fades, and any effect the MRP does not take. The 2D maps cleanly to
 emulating it is simple and exact. What the game draws into its own memory to use as a texture (the
 menus' pictures, such as the ship's planet menu's planet, made of three blended layers) goes into a
 render target that keeps the GS's alpha (0x80 = 1.0); its blending reads that alpha at the GS's scale.
+With the modern renderer a font's glyph (a 16 x 16 or 24 x 16 texel cell, a quad whose texture coordinates follow x and y apart)
+is sampled only inside its own cell: scaled up from the PS2's resolution, the bilinear filtering of a glyph's outer half texel
+blended in the neighbouring glyphs' edges in the font's texture, thin lines under, over and through the letters (issue #76; the
+GS drew the glyphs 1:1, at its texels' centres). The faithful reference (`RAC1_MRP=0`) samples as the GS.
 Every ALPHA register's `(A - B) C + D` maps to the GL's blending (add, subtract or reverse subtract; the two
 combinations with a factor `1 + C` use 1), for the replica, the MRP's mobys, world and effects alike: the
 subtractive second pass of the force fields, Orxon's O2 barriers and Quartu's gates (`(Cd - Cs) FIX`) was drawn

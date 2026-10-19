@@ -2657,6 +2657,12 @@ int main(int argc, char** argv) {
             fd.fb_w = static_cast<float>(lhu(0x001518d0));
             fd.fb_h = static_cast<float>(lhu(0x001518d2));
             render_overscan_crop(fd.fb_w, fd.fb_h, fd.gv.crop);  // the 2D cut to a TV's area, or the full frame
+            // the glyphs' sampling inside their own cells (no neighbouring glyphs' lines around the letters, issue #76): the modern
+            // view's; the faithful reference (RAC1_MRP=0) samples as the GS. (testing: RAC1_SPRITE_CLAMP=0 / 1 decides)
+            {
+                static const char* s_sc = std::getenv("RAC1_SPRITE_CLAMP");
+                fd.gv.sprite_clamp = s_sc != nullptr ? std::atoi(s_sc) != 0 : g_moby_renderer == MobyRenderer::kMrp;
+            }
             // the frame's page: FRAME_1 of the draw environment the frame's fixed packet 0x13cf10
             // sets (render_passes.cpp), the screen even when sampled (the drop shadows' alpha)
             fd.gv.screen_fbp = static_cast<int>(lwu(0x0013cf20) & 0x1ff);
