@@ -86,7 +86,8 @@ sources, which `./setup.sh` makes on Linux: they are the same on Windows.
 ## Verification
 
 - **Build:** a CI workflow (`.github/workflows/build.yml`) builds on Linux, on a Windows runner
-  (MSYS2, clang) and cross-compiled from Linux. A public CI has no disc, so it cannot generate the
+  (MSYS2, clang) and cross-compiled from Linux, and on a Linux ARM64 runner (not blocking yet: the ARM64
+  port is in progress, #78). A public CI has no disc, so it cannot generate the
   game's code: it builds with `-DRAC1_NO_GENERATED=ON`, which compiles everything else (the
   hardware layer, the formats, the platform layer, the setup mode, the debug menu, the host, the
   game's hand-written code) and links nothing.
