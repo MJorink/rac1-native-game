@@ -1,12 +1,12 @@
 # Environment variables
 
-rac1-native reads a number of `RAC1_*` environment variables. This page lists all of them: 282 in
+rac1-native reads a number of `RAC1_*` environment variables. This page lists all of them: 283 in
 total, in three groups.
 
 | Group | Count | Who it is for |
 |---|---|---|
 | [Player](#player-variables) | 18 | Settings a player may want to change: files, window, audio, the ISO |
-| [Debugging](#debugging-variables) | 207 | Developers: profilers, overlays, switching a renderer or an optimisation on or off to compare |
+| [Debugging](#debugging-variables) | 208 | Developers: profilers, overlays, switching a renderer or an optimisation on or off to compare |
 | [Automated testing](#automated-testing-variables) | 57 | Scripted and headless runs: frame counts, screenshots, simulated input, self-checks |
 
 The oracle (`build/tests/ovl_oracle`) reads variables of its own (`ORACLE_*`, `RAC1_ORACLE_DUMPS`): see
@@ -167,6 +167,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_MRP_WIDEN_EFFECTS` | 0 = off; default on | Switches off the widescreen widening of the effects (particles and similar) so they are culled as in 4:3. |
 | `RAC1_MRP_WIDEN_GLOWS` | 0 = off; default on | Switches off the widening of the glows and other drawn-list objects at the sides of a widescreen view, to compare. |
 | `RAC1_MRP_WIDEN_LISTS` | 0 = off; default on | Switches off the widening of the draw lists' callbacks (the levels' water, lava and sand-sea surfaces, culled against the 4:3 clip matrix) at the sides of a widened view, to compare. |
+| `RAC1_MRP_WIDEN_TERMS` | 0 = off; default on | Switches off the widening of the other frustum tests the draw lists' callbacks make in a widened view (the point test 0x2002e0 that the water, lava and sand-sea grids cull their cells with, the quad drawer's reject of quads past the sides), as before, to compare. |
 | `RAC1_MUSIC_TRACE` | set (any value) = on; default off | Prints the music streams' state (sequence step, tracks, music and dialogue slots) each frame it changes. |
 | `RAC1_OVERSCAN` | 0 = full frame, 1 = the TV's area, or `left,right,top,bottom` in pixels; unset = the Graphics page's Overscan row | Overrides the 2D overscan crop. |
 | `RAC1_OWN_OVERLAY` | 0 = run every level on Veldin's overlay image; anything else or unset = each level on its own overlay | For comparison, makes every level run on the first level's overlay instead of its own. |
