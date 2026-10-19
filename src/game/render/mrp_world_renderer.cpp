@@ -2213,6 +2213,8 @@ void build_emitters() {
         const TieClass& tc = *ci->second;
         std::map<std::tuple<int, int, int>, Cell> cells;
         double total_area = 0.0, lit_area = 0.0;  // (the class's whole surface, its glowing part)
+        double white_area = 0.0;                  // (testing, RAC1_LIGHTS_WHITE: the part textured near white - neon panels)
+        static const bool white_trace = std::getenv("RAC1_LIGHTS_WHITE") != nullptr;
         for (const StaticPacket& sp : sc.lod[0]) {
             const auto ti = L.tpl.find(sp.tie);
             if (ti == L.tpl.end()) continue;
@@ -2242,10 +2244,15 @@ void build_emitters() {
                     }
                     // seven samples: the corners, the edges' middles, the centre
                     static const float bw[7][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {.5f, .5f, 0}, {0, .5f, .5f}, {.5f, 0, .5f}, {1 / 3.f, 1 / 3.f, 1 / 3.f}};
-                    int hits = 0;
+                    int hits = 0, whites = 0;
                     double cr = 0, cg = 0, cb = 0;
                     for (const auto& b : bw) {
                         const uint32_t c = texel(b[0] * s[0] + b[1] * s[1] + b[2] * s[2], b[0] * tt[0] + b[1] * tt[1] + b[2] * tt[2]);
+                        if (white_trace) {  // (near white: bright and grey)
+                            const int r8 = static_cast<int>(c & 0xff), g8 = static_cast<int>((c >> 8) & 0xff), b8 = static_cast<int>((c >> 16) & 0xff);
+                            const int mx = std::max({r8, g8, b8}), mn = std::min({r8, g8, b8});
+                            if (mn >= 0xb0 && mx - mn <= mx / 6) ++whites;
+                        }
                         if (!emissive_rgba(c)) continue;
                         ++hits;
                         cr += (c & 0xff) / 255.0;
@@ -2256,6 +2263,7 @@ void build_emitters() {
                     const double cx = e1[1] * e2[2] - e1[2] * e2[1], cy = e1[2] * e2[0] - e1[0] * e2[2], cz = e1[0] * e2[1] - e1[1] * e2[0];
                     const double tri = 0.5 * std::sqrt(cx * cx + cy * cy + cz * cz) / (1024.0 * 1024.0);  // (world units^2 at scale 1)
                     if (std::isfinite(tri)) total_area += tri;
+                    if (whites >= 3 && std::isfinite(tri)) white_area += tri * whites / 7.0;
                     if (hits < 4) continue;
                     const double area = tri * hits / 7.0;
                     if (!(area > 0.0)) continue;
@@ -2288,6 +2296,9 @@ void build_emitters() {
         if (std::getenv("RAC1_LIGHTS_TRACE") != nullptr && lit_area > 0.0)
             std::printf("[lights] tie class %d: glowing %.1f of %.1f units^2 (%.0f %%), hue %.0f%s\n", tc.o_class, lit_area, total_area, 100.0 * share, hue,
                         material ? ": a material, not a lamp" : "");
+        if (white_trace && white_area > 0.0)
+            std::printf("[lights] tie class %d: near white %.2f of %.1f units^2 (%.1f %%), %u instances\n", tc.o_class, white_area, total_area, 100.0 * white_area / total_area,
+                        lhu(sc.rec + 0x26));
         if (lit_area > 0.0) g_emitter_classes.push_back(EmitterClass{tc.o_class, static_cast<float>(share), hue, 0, material});
         if (material || mrp_user_lights_class_off(tc.o_class)) cells.clear();
         // (the 12 largest cells of the class: a lamp is a few lights, a glowing wall a dozen at most)
@@ -2892,6 +2903,81 @@ void mrp_world_draw_casters(const float* light_vp, int view) {
 std::vector<EmitterClass> mrp_world_emitter_classes() { return g_emitter_classes; }
 // orig: (host) see mrp_lighting.h
 void mrp_world_emitters_rebuild() { g_emitters_level = -2; }
+
+// orig: (host) see mrp_lighting.h
+const std::vector<TieSpot>& mrp_world_tie_instances() {
+    static std::vector<TieSpot> list;
+    static int level = -2;
+    static std::mutex m;
+    std::lock_guard<std::mutex> lg(m);
+    if (level == g_level.id && g_level.loaded) return list;
+    list.clear();
+    level = g_level.id;
+    const Level& L = g_level;
+    if (!L.loaded || L.world == nullptr || !g_slevel.ok) return list;
+    std::unordered_map<const TiePacket*, const TieClass*> cls_of;
+    for (const TieClass& c : L.world->ties)
+        for (const TiePacket& p : c.packets) cls_of[&p] = &c;
+    for (const StaticTieClass& sc : g_slevel.ties) {  // (as the automatic emitters' instances: the level's tables)
+        if (sc.lod[0].empty() || sc.lod[0].front().tie == nullptr) continue;
+        const auto ci = cls_of.find(sc.lod[0].front().tie);
+        if (ci == cls_of.end()) continue;
+        float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};  // (the model's box: its LOD 0 vertices)
+        for (const StaticPacket& sp : sc.lod[0]) {
+            const auto ti = L.tpl.find(sp.tie);
+            if (ti == L.tpl.end()) continue;
+            const Tpl& t = ti->second;
+            for (const TplRun& run : t.runs)
+                for (uint32_t k = 0; k < run.count; ++k) {
+                    const TVert& v = L.tverts[t.first_vertex + L.tidx[t.first_index + run.first + k]];
+                    for (int l = 0; l < 3; ++l) {
+                        lo[l] = std::min(lo[l], static_cast<float>(v.pos[l]) / 1024.0f);
+                        hi[l] = std::max(hi[l], static_cast<float>(v.pos[l]) / 1024.0f);
+                    }
+                }
+        }
+        if ((lhu(sc.rec + 0x24) & 9) != 0) continue;
+        const uint32_t bounds = lwu(sc.rec + 0x28), n = lhu(sc.rec + 0x26);
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t data = lwu(bounds + 0x20 * i + 0x10);
+            TieSpot t;
+            t.o_class = ci->second->o_class;
+            float pos[4];
+            for (uint32_t l = 0; l < 4; ++l) pos[l] = lwc1(data + 0x30 + 4 * l);
+            for (uint32_t l = 0; l < 3; ++l) t.pos[l] = pos[l];
+            for (uint32_t r = 0; r < 3; ++r)  // (the rows scaled as the emitters' model / 1024: a world unit at scale 1)
+                for (uint32_t l = 0; l < 3; ++l) t.rows[r][l] = lwc1(data + 0x10 * r + 4 * l) * pos[3];
+            for (int l = 0; l < 3; ++l) {
+                t.lo[l] = lo[l] <= hi[l] ? lo[l] : 0.0f;
+                t.hi[l] = lo[l] <= hi[l] ? hi[l] : 0.0f;
+            }
+            const uint32_t b = bounds + 0x20 * i;
+            for (uint32_t l = 0; l < 4; ++l) t.sphere[l] = lwc1(b + 4 * l);
+            list.push_back(t);
+        }
+    }
+    const uint32_t shrub_data = lwu(OV(0x0016049cu));
+    for (size_t c = 0; c < g_slevel.shrubs.size() && c < L.world->shrubs.size(); ++c) {  // the shrubs: class c is the asset's class c
+        const StaticShrubClass& sc = g_slevel.shrubs[c];
+        if (sc.packets.empty()) continue;
+        const uint32_t bounds = lwu(sc.rec + 0x18), n = lhu(sc.rec + 0x16);
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t b = bounds + 0x20 * i;
+            const uint32_t data = shrub_data + 0x40 * lhu(b + 0x18);
+            TieSpot t;
+            t.shrub = true;
+            t.o_class = L.world->shrubs[c].o_class;
+            float pos[4];
+            for (uint32_t l = 0; l < 4; ++l) pos[l] = lwc1(data + 0x30 + 4 * l);
+            for (uint32_t l = 0; l < 3; ++l) t.pos[l] = pos[l];
+            for (uint32_t r = 0; r < 3; ++r)
+                for (uint32_t l = 0; l < 3; ++l) t.rows[r][l] = lwc1(data + 0x10 * r + 4 * l) * pos[3];
+            for (uint32_t l = 0; l < 4; ++l) t.sphere[l] = lwc1(b + 4 * l);
+            list.push_back(t);
+        }
+    }
+    return list;
+}
 
 // orig: (host) see mrp_lighting.h
 bool mrp_world_casters_built() { return g_cast_cascades; }

@@ -89,6 +89,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_HERO_TRACE` | set (any value) = on; default off | Prints the hero's state in the drawn scene each frame. |
 | `RAC1_LIGHTS_DIR` | directory; default data/lights | Directory of the per-level user light files (levelNN.txt) loaded and saved by the in-game light editor. |
 | `RAC1_LIGHTS_JUMPS` | set (any value) = on; default off | Prints a line whenever a point light's weight changes abruptly between two frames, to find lights popping on and off. |
+| `RAC1_LIGHTS_WHITE` | set (any value) = on; default off | With the modern lighting, prints the tie classes partly textured near white (neon panels the automatic emitters do not take), their share and instance count. |
 | `RAC1_LIGHTS_TRACE` | any value = on; default off | Prints a per-class trace of the light-emitting mobys (area of their emitters) when the modern lighting model is built. |
 | `RAC1_LOAD_PROF` | nonzero integer = on; default off | Prints "[load]" lines with the milliseconds each level-loading step takes. |
 | `RAC1_MEMCARD` | 0 = no memory card, nonzero = card inserted; unset = inserted in a windowed run, not inserted in a headless run unless RAC1_MEMCARD_DIR is set | Chooses whether a virtual memory card is plugged in at start-up. |
@@ -177,6 +178,8 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_PART_TRACE` | any value = on; default off | Every 30 frames prints the live particles counted by type. |
 | `RAC1_PICKUP_LOG` | integer period in frames; unset = off | Every given number of frames prints the live item pickups and crates within 15 units of the hero (class, state, item, amount, timer, velocity). |
 | `RAC1_PIPELINE` | 0 = off, any other integer = on; unset = the saved setting | Forces the host's pipelining setting on or off, for comparison. |
+| `RAC1_PICK` | x,y,z; default off | With the modern lighting, prints once the objects at that world point (the tie instance whose model box holds it, the nearest moby within 6 units) with their class and the point in their frame: an `emit` line's class and offset. |
+| `RAC1_PICK_SCREEN` | u,v (0..1 from the bottom left of the 3D); default off | With the modern lighting, every 60 frames prints the world point under that point of the picture (its depth) and the objects there, as RAC1_PICK. |
 | `RAC1_POINTS` | 0 = off, 1 = on; default 1 | Forces the modern renderer's point lights on or off, overriding the Options setting. |
 | `RAC1_POINT_SHADOWS` | 0 = off, 1 = on; default 0 | Forces shadows from the dynamic point lights on or off, overriding the Options setting. |
 | `RAC1_POINT_TILES` | 0 = every light is applied everywhere; default per-tile light assignment | Switches off the per-tile selection of point lights, for comparing speed and look. |
@@ -193,10 +196,6 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_SHADOW_DEBUG` | integer; 0 = off, 2 and 3 select shadow debug views; default 0 | Selects a debug visualisation in the lighting shader (2 shows shadow state, 3 shows only the added point light term). |
 | `RAC1_SHADOW_DUMP` | integer n; unset = off | Every n-th draw writes the shadow cascades' depth to shadow_casc<k>.pgm images in the current directory. |
 | `RAC1_SHADOW_EARLYZ` | 0 = off; default on | Switches off the depth-only program used for opaque shadow casters, to compare. |
-| `RAC1_SHADOW_FADE` | 0 = off, 1 = on; default 1 | Switches the distance fade of far shadows off or on. |
-| `RAC1_SHADOW_FADE_FROM` | integer world units; default 25 | Distance where the far-shadow fade starts. |
-| `RAC1_SHADOW_FADE_KEEP` | integer percent; default 35 | How much shadow strength is kept at the end of the far-shadow fade. |
-| `RAC1_SHADOW_FADE_TO` | integer world units; default 120 | Distance where the far-shadow fade ends. |
 | `RAC1_SHADOW_FBO_TRACE` | any value = on; default off | Prints (up to 5 times) when the read framebuffer differs from the draw framebuffer during the shadow pass. |
 | `RAC1_SHADOW_LIGHTS` | any value = on; default off | Prints the level's light sets once, when the lighting first reads them. |
 | `RAC1_SHADOW_MCACHE` | 0 = off; default on | Switches off the cache of moving shadow casters, to compare. |
@@ -209,7 +208,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_SHADOW_SHOW_CASTERS` | any value = on; default off | Draws the shadow casters' set in the normal view instead of the shadow maps, to see what casts shadows. |
 | `RAC1_SHADOW_SKIP` | 1 or 2; default 0 (off) | Testing switch for the modern shadow pass: 1 leaves the world out of the shadow maps, 2 leaves the mobys out, so the other contributes alone. |
 | `RAC1_SHADOW_SPLITS` | three comma-separated increasing positive floats "a,b,c"; unset = built-in cascade splits | Overrides the distances at which the modern shadow cascades split. Ignored if the three numbers are not valid and increasing. |
-| `RAC1_SHADOW_STRENGTH` | integer 0-100; default 55 | Darkness of the modern shadows (initial value of the shadow strength setting). |
+| `RAC1_SHADOW_STRENGTH` | integer 0-100; default 70 (Options > Graphics > Shadow Strength) | The modern lighting's shadow strength: the share of the sun's light a full shadow hides, the same for the world and the mobys. See [Lighting](lighting.md). |
 | `RAC1_SHADOW_TFRAG_HIGH` | any value = on; default off | Debug print for the shadow pass listing terrain (tfrag) entries lying high above the camera along the sun direction. |
 | `RAC1_SHADOW_TFRAG_KEEP` | any value = on; default off | Testing: in the shadow maps keep the terrain entries the frame already drew (at their view LOD) and add the rest, instead of rebuilding every entry at its own distance LOD. |
 | `RAC1_SHADOW_TFRAG_TRACE` | any value = on; default off | Prints, each frame, how many terrain (tfrag) packets were decided to cast shadows and how many were emitted. |
@@ -222,12 +221,15 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_SND_TRACE` | any value = on; default off | Prints a trace of the sound-bank (989snd) events the game sends to the emulated IOP sound driver. |
 | `RAC1_STALL_LOG` | milliseconds as a number; default off (-1) | Logs every game step (a game frame or a blocking loop's frame) that takes longer than the given number of milliseconds, with the vsyncs it spanned. |
 | `RAC1_SUB_TRACE` | any value = on; default off | Prints, for each substituted draw range, how many substitute and real primitives the GS emulation kept or dropped. |
-| `RAC1_SUN_COVER` | 0 = off; default on | The modern lighting's check of how much of the view sees the sun (the sun's shadows fade out in a view covered from it, such as a room). 0 keeps the zone's sun everywhere, to compare. See [Lighting](lighting.md). |
-| `RAC1_SUN_COVER_TRACE` | set (any value) = on; default off | Every 60 frames prints how much of the view sees the sun, the sky's share and the sun's weight scale that follows from it. |
-| `RAC1_SUN_DIR` | three comma-separated floats "x,y,z"; unset = the level's own sun direction | Overrides the direction of the sun used by the modern lighting and shadows (normalised; ignored if near zero length). |
+| `RAC1_SUN_COVER` | 1 = on; default off | The modern lighting's old probe of how much of the view sees the sun (the sun's shadows faded out in a view covered from it). Now off: the level files' interiors decide where the sun is off. For testing. See [Lighting](lighting.md). |
+| `RAC1_SUN_COVER_SKY` | 0 = off; default on | The modern lighting's memory of the places where the sky was in view (outdoors: the sun is kept there whatever the view shows). 0 leaves the view's measure alone, as in 0.4.0, to compare. See [Lighting](lighting.md). |
+| `RAC1_SUN_COVER_TRACE` | set (any value) = on; default off | Every 60 frames prints how much of the view sees the sun, the sky's share, whether the camera is outdoors (near a place the sky was seen from) and the sun's weight scale that follows from them. |
+| `RAC1_SUN_DIR` | three comma-separated floats "x,y,z"; unset = the level's own sun direction | Turns the modern lighting's sun to that direction toward it (normalised; ignored if near zero length), as a level's `sun` line would: the world and the mobys lit from it, the key light's colour kept; where the zone has no sun, a sun of weight 1 with the shadows' share (`RAC1_SHADOW_STRENGTH`). |
 | `RAC1_SUN_LEVEL` | set (any value) = on; default off | The modern lighting's sun always uses the level's light set 0 (the old way) instead of the light set the hero is lit with. See [Lighting](lighting.md). |
 | `RAC1_SUN_TRACE` | set (any value) = on; default off | Prints the light sets the hero is lit with, for the modern lighting's sun. See [Lighting](lighting.md). |
+| `RAC1_TFRAG_LIGHT_TRACE` | <every>[,x,y,z,r]; default off | Every <every> drawn frames with the modern lighting on, takes the terrain's (tfrag) lit vertex colours within r units (default 12) of the hero, or of x,y,z, apart as the game's relighting makes them: base colour, the light set's two directional terms, against the colour in EE memory; prints the means, the light sets used and the sun. See [Lighting](lighting.md). |
 | `RAC1_TF_HITS` | integer; default 2 | Testing threshold for the terrain shadow build: a candidate with fewer than this many hits is discarded. |
+| `RAC1_TIE_NEAR` | x,y,z[,r]; default off | With the modern lighting, prints once the tie instances and the mobys within r units (default 6) of that point, with their class. |
 | `RAC1_TITLE_TRACE` | any value = on; default off | Prints the title scene's state (frame, block, mobys, lists) about once every 100 frames while the title screen runs. |
 | `RAC1_VIEW_ANGLE` | angle in radians as a float; default 0 | With RAC1_VIEW_HERO_FRONT, the angle around the hero (from straight in front) at which the debug camera sits. |
 | `RAC1_VIEW_AT` | six comma-separated floats "ex,ey,ez,ax,ay,az"; unset = game camera | Forces a fixed host debug camera: eye position then target point, in world units. |
@@ -265,6 +267,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_WORLD_MRP_DEBUG` | any value = on; default off | Prints extra diagnostics from the modern world renderer (per-draw and texture information). |
 | `RAC1_WORLD_MRP_DIFF` | any value = on; default off | Renders the world both with the modern renderer and the faithful GS path and computes their pixel difference, disabling the GPU fast paths. |
 | `RAC1_WORLD_MRP_DIFF_SHOTS` | comma-separated list of frame numbers; default none | With RAC1_WORLD_MRP_DIFF, saves the two images and their difference as pictures at the listed frames. |
+| `RAC1_WORLD_SHADOW` | share; unset = off | With the modern lighting, a sun shadow on the world removes a fixed share of the colour (`RAC1_SHADOW_STRENGTH`, scaled by how much the surface faces the sun) as in 0.4.0, instead of the key light's own term. To compare. See [Lighting](lighting.md). |
 
 ## Automated testing variables
 
@@ -293,6 +296,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_IOP_VERIFY` | set (any value) = on; default off | Keeps the IOP mirror from ever playing alone so each of its vsync mixes can be compared with the emulated IOP's mix; the counts are reported at exit. |
 | `RAC1_KILL_AT` | game frame number; default off | At that game frame sets Ratchet's health to zero. |
 | `RAC1_KILL_UIDS` | <frame>:<uid>,<uid>,...; unset = off | At that game frame sets the state of the listed mobys (by unique id) to the dead state, so the things that watch for their death react. |
+| `RAC1_LAMP_SCAN` | integer frames; default off | With the modern lighting, every that many frames reads the 3D picture's bright texels (not the sky), finds the object at each (tie, shrub or moby class, as the Lights tab's picker) and prints, every 600 frames, per class the hits, the mean colour and a place: a survey of the lamps on screen for `emit` lines. |
 | `RAC1_LANGUAGE` | 0 English, 2 French, 3 German, 4 Spanish, 5 Italian; unset = the game's own choice | Sets the game's language, also in headless runs. |
 | `RAC1_LEVEL` | level number; default 0 (Veldin); same as --level | Starts directly on the given level instead of the normal start. |
 | `RAC1_MENU_AT` | integer frame number; default 120 | In a scripted menu input run (simulated keys), the frame at which the simulated button press happens instead of the default, with Start also pressed at frame 120 to skip the arrival scene. |

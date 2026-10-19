@@ -40,6 +40,7 @@ and behave like the game's own pages. Left and right change a row's value; Cross
 | Field of View | x0.75 to x1.50 of the original's | x1.00 |
 | Level of Detail | Original, Low, Medium, High, Maximum | Original |
 | Lighting | Original, Low, Medium, High | Original |
+| Shadow Strength | 50, 60, 70, 80, 90, 100 (%) | 70 |
 | Shadow Distance | Low, Medium, High, Maximum | Maximum |
 | Dynamic Shadows | Off, On | Off |
 | Secondary Lights | Off, Game's, All | All |
