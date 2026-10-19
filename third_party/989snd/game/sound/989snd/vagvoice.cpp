@@ -38,6 +38,7 @@ void VoiceManager::StartTone(std::shared_ptr<VagVoice> voice) {
 
   CleanVoices();
   mVoices.emplace_front(voice);
+  mSynth.AllocVoice(*voice, voice->group, voice->tone.Priority);  // rac1: its SPU2 voice's core
   mSynth.AddVoice(voice);
 }
 VolPair VoiceManager::MakeVolume(int vol1, int pan1, int vol2, int pan2, int vol3, int pan3) {

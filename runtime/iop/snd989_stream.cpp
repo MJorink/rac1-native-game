@@ -157,6 +157,9 @@ void voice_apply(Stream& s) {
     }
     const snd::VolPair v = stream_volume(s);
     s.voice->SetVolume(static_cast<uint16_t>(v.left), static_cast<uint16_t>(v.right));
+    // (host) in 5.1 / 7.1 the dialogue (group 2) on the centre speaker, its pan towards the front left / right; the
+    // others (the music) on the front left / right
+    s.voice->SetPlace(s.group == 2 ? snd::Voice::Place::Centre : snd::Voice::Place::Front, s.pan);
     s.voice->SetPitch(static_cast<uint16_t>(s.pitch));
 }
 
@@ -303,6 +306,8 @@ int32_t stream_play(snd::Player& p, const uint32_t* args) {
     s->voice->SetAsdr1(0x000f);  // the IRX's stream voices (0xa3d8 / 0xa430)
     s->voice->SetAsdr2(0x1fc0);
     s->voice->SetSample(s->spu.data());
+    s->voice->SetReverb((flags & 2) != 0);  // (the record's 0x100: the voice's VMIXE, 0xef8c / 0x1372c)
+    p.AllocVoice(*s->voice, group, 0x7f);   // (its SPU2 voice, 0xe948: the group's range; its core)
     s->voice->KeyOn();
     voice_apply(*s);
     std::shared_ptr<snd::Voice> v = s->voice;

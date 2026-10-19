@@ -15,6 +15,18 @@
 
 namespace rac1 {
 
+// (enhancement, advanced.cpp) Options > Sound's output row with 5.1 / 7.1. The game's row is Mono / Stereo, its byte
+// 0x15ede8 (the game's options, in its save; 0 mono); 5.1 and 7.1 come after Stereo: the host's choice (the audio
+// device's channels, kept in the preferences), the game's byte left at Stereo, so nothing the game keeps or reads changes.
+// - advanced_audio_channels: the device's channels, 2 / 6 (5.1) / 8 (7.1) (RAC1_AUDIO_CHANNELS over the preferences;
+//   2 while every enhancement is off)
+// - advanced_sound_output_cycle: cross on the row: the next of Mono, Stereo, 5.1, 7.1 (the game's byte 0 for Mono, 1
+//   for the others; the device reopened); false while every enhancement is off (the game's own toggle then)
+// - advanced_sound_output_text: the row's text when the game's byte says Stereo: "5.1" / "7.1", else `stereo_text`
+int advanced_audio_channels();
+bool advanced_sound_output_cycle(uint32_t mono_byte);
+int32_t advanced_sound_output_text(int32_t stereo_text);
+
 namespace {
 constexpr OvConst<0x001b9cf0u> MS{};   // the menu's state
 constexpr uint32_t PAD = 0x0013c940;  // pad 1
@@ -137,7 +149,7 @@ int32_t menu_sound_update(uint32_t w) {
         sw(T + 0x58, static_cast<uint32_t>(v));
     }
     if ((lwu(PAD + 0x1c4) & 0x40) != 0) {
-        if (lw(w + 0x40) == 2) sw(MONO, lw(MONO) == 0 ? 1u : 0u);
+        if (lw(w + 0x40) == 2 && !advanced_sound_output_cycle(MONO)) sw(MONO, lw(MONO) == 0 ? 1u : 0u);  // (enhancement: also 5.1 / 7.1)
         snd_cmd_0b(lw(MONO) == 0 ? 1u : 0u);
         moby_sound_start(0, 0x11, lwu(w + 0x14));
     }
@@ -186,7 +198,7 @@ int32_t menu_sound_draw(uint32_t w) {
     uint64_t c3 = sel;
     if ((lw(w + 0x40) ^ 2) != 0) c3 = 0x80ffa888ull;
     text_right(xl, y2, c3, sub_00203ad8(0x5214), -1);
-    text_small(xt, y2, 0x80ffa888ull, sub_00203ad8(lw(MONO) == 0 ? 0x5215 : 0x5216), -1);
+    text_small(xt, y2, 0x80ffa888ull, sub_00203ad8(lw(MONO) == 0 ? 0x5215 : advanced_sound_output_text(0x5216)), -1);  // (enhancement: 5.1 / 7.1)
     texture_block_end();
     return 2;
 }

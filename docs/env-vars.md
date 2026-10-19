@@ -61,7 +61,8 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_AO` | integer: 0 off, 1 SSAO, 2 SSAO+, 3 HBAO, 4 GTAO, 5 GTAO at half resolution; default 0 (the Options > Graphics Ambient Occlusion setting is used unless this is set) | Forces the ambient occlusion mode, overriding the menu setting, for comparison and testing. |
 | `RAC1_AO_RADIUS` | integer in hundredths; default 90 | Sets the sampling radius of the ambient occlusion pass (value divided by 100) for tuning. |
 | `RAC1_AO_STRENGTH` | integer in hundredths; default 70 | Sets the darkening strength of the ambient occlusion pass (value divided by 100) for tuning. |
-| `RAC1_AUDIO_DUMP` | file path; unset = no dump | Writes the game's sound output to the file as raw 48 kHz stereo signed 16-bit PCM. |
+| `RAC1_AUDIO_CHANNELS` | 2, 6 or 8 (or 5.1 / 7.1); default unset = the Options > Sound choice (stereo in headless runs) | Overrides the output's channels: the audio device's, and RAC1_AUDIO_DUMP's (6 / 8 channels interleaved, FL FR FC LFE then SL SR / BL BR SL SR), to test 5.1 / 7.1 without the menu. |
+| `RAC1_AUDIO_DUMP` | file path; unset = no dump | Writes the game's sound output to the file as raw 48 kHz stereo signed 16-bit PCM (6 / 8 channels with RAC1_AUDIO_CHANNELS or the 5.1 / 7.1 choice at the start). |
 | `RAC1_AUDIO_LOG` | set (any value) = on; default off | Prints the audio queue's summary (underruns, skips, and so on) every 10 seconds. |
 | `RAC1_AUDIO_QUEUE` | 0354 = use the older fixed-queue policy; unset = current adaptive policy | Switches the audio queue to its earlier simple policy (fixed 2-frame start, no rate control, no fades) so the two can be compared. |
 | `RAC1_AUTOPILOT_LOG` | moby class number; default -1 = off | Every 10 frames prints the live mobys of that class, used to record a racer's line as waypoints for the autopilot. |
@@ -72,7 +73,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_CAM_TRACE` | set (any value) = on; default off | Prints every camera switch to stderr. |
 | `RAC1_CARD_LOG` | set (any value) = on; default off | Prints a line whenever the memory card screens or machines change state (UI state, flags, level, slot, owned items, bolts). |
 | `RAC1_CHAIN_LOG` | set (any value) = on; default off | Every host frame prints the address range of the graphics DMA chain that is walked and whether it runs. |
-| `RAC1_DEVICE_DUMP` | file path; unset = no dump | Writes what the audio device is given, as played (raw 48 kHz stereo signed 16-bit PCM): the queue's skips, underruns and the IOP's frames played alone are in it, to look for clicks; unlike RAC1_AUDIO_DUMP (the game's IOP's output). |
+| `RAC1_DEVICE_DUMP` | file path; unset = no dump | Writes what the audio device is given, as played (raw 48 kHz signed 16-bit PCM, the device's channels): the queue's skips, underruns and the IOP's frames played alone are in it, to look for clicks; unlike RAC1_AUDIO_DUMP (the game's IOP's output). |
 | `RAC1_EMIT_MAX_SHARE` | fraction 0 to 1; default 0.35 | The modern lighting's automatic emitters: a warm-coloured class glowing over more than this share of its surface is taken as a bright material, not a lamp. |
 | `RAC1_FADE_LOG` | set (any value) = on; default off | Prints the frames of the game's blocking loops (fades and waits) as they run. |
 | `RAC1_FPU_NEAREST` | 1 = host round-to-nearest; default off (round toward zero as the PS2) | Turns off the PS2-style float rounding so the host's normal rounding is used, only to compare behaviour. |
