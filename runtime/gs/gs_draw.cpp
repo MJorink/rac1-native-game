@@ -230,9 +230,15 @@ struct V {
     float d;  // window depth (0.5 without depth)
     float f;  // the vertex's fog byte (XYZF2's F)
 };
+struct DrawLocs {
+    GLint fb = -1, rt = -1, scale_x = -1, fge = -1, fog_col = -1;
+    GLint tme = -1, tfx = -1, tcc = -1, ate = -1, atst = -1, aref = -1, afail = -1, pass = -1;
+    GLint scr_tex = -1, date = -1, datm = -1, scr_map = -1;
+    GLint mip_n = -1, mip_lo = -1, mip_lcm = -1, mip_mxl = -1, mip_k = -1, mip_l = -1;
+} g_loc;
 }  // namespace
 
-void blend_state(const DrawState& st) {
+void blend_state(const DrawState& st, bool to_rt) {
     if (!field(st.prim, 6, 1)) {
         glDisable(GL_BLEND);
         return;
@@ -273,6 +279,15 @@ void blend_state(const DrawState& st) {
         glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
         sf = df = GL_ZERO;
     }
+    if (to_rt) {
+        auto as_gs = [](GLenum f) -> GLenum {
+            if (f == GL_SRC_ALPHA) return GL_SRC1_ALPHA;
+            if (f == GL_ONE_MINUS_SRC_ALPHA) return GL_ONE_MINUS_SRC1_ALPHA;
+            return f;
+        };
+        sf = as_gs(sf);
+        df = as_gs(df);
+    }
     glBlendFuncSeparate(sf, df, GL_ONE, GL_ZERO);
 }
 
@@ -282,6 +297,35 @@ void draw_init() {
     glAttachShader(g_prog, compile(GL_VERTEX_SHADER, VS));
     glAttachShader(g_prog, compile(GL_FRAGMENT_SHADER, FS));
     glLinkProgram(g_prog);
+    g_loc.fb = glGetUniformLocation(g_prog, "uFb");
+    g_loc.rt = glGetUniformLocation(g_prog, "uRt");
+    g_loc.scale_x = glGetUniformLocation(g_prog, "uScaleX");
+    g_loc.fge = glGetUniformLocation(g_prog, "uFge");
+    g_loc.fog_col = glGetUniformLocation(g_prog, "uFogCol");
+    g_loc.tme = glGetUniformLocation(g_prog, "uTme");
+    g_loc.tfx = glGetUniformLocation(g_prog, "uTfx");
+    g_loc.tcc = glGetUniformLocation(g_prog, "uTcc");
+    g_loc.ate = glGetUniformLocation(g_prog, "uAte");
+    g_loc.atst = glGetUniformLocation(g_prog, "uAtst");
+    g_loc.aref = glGetUniformLocation(g_prog, "uAref");
+    g_loc.afail = glGetUniformLocation(g_prog, "uAfail");
+    g_loc.pass = glGetUniformLocation(g_prog, "uPass");
+    g_loc.scr_tex = glGetUniformLocation(g_prog, "uScrTex");
+    g_loc.date = glGetUniformLocation(g_prog, "uDate");
+    g_loc.datm = glGetUniformLocation(g_prog, "uDatm");
+    g_loc.scr_map = glGetUniformLocation(g_prog, "uScrMap");
+    g_loc.mip_n = glGetUniformLocation(g_prog, "uMipN");
+    g_loc.mip_lo = glGetUniformLocation(g_prog, "uMipLo");
+    g_loc.mip_lcm = glGetUniformLocation(g_prog, "uMipLcm");
+    g_loc.mip_mxl = glGetUniformLocation(g_prog, "uMipMxl");
+    g_loc.mip_k = glGetUniformLocation(g_prog, "uMipK");
+    g_loc.mip_l = glGetUniformLocation(g_prog, "uMipL");
+    glUseProgram(g_prog);
+    glUniform1i(glGetUniformLocation(g_prog, "uTexture"), 0);
+    glUniform1i(glGetUniformLocation(g_prog, "uScreen"), 1);
+    glUniform1i(glGetUniformLocation(g_prog, "uMip1"), 2);
+    glUniform1i(glGetUniformLocation(g_prog, "uMip2"), 3);
+    glUniform1i(glGetUniformLocation(g_prog, "uMip3"), 4);
     glGenVertexArrays(1, &g_vao);
     glGenBuffers(1, &g_vbo);
     glBindVertexArray(g_vao);
@@ -315,21 +359,16 @@ void draw(const Gs& gs, int win_w, int win_h, float FB_W, float FB_H, const Dept
     glDisable(GL_CULL_FACE);
     glEnable(GL_SCISSOR_TEST);
     glActiveTexture(GL_TEXTURE0);
-    glUniform1i(glGetUniformLocation(g_prog, "uTexture"), 0);
-    glUniform2f(glGetUniformLocation(g_prog, "uFb"), FB_W, FB_H);
-    const GLint lTme = glGetUniformLocation(g_prog, "uTme"), lTfx = glGetUniformLocation(g_prog, "uTfx"), lTcc = glGetUniformLocation(g_prog, "uTcc");
-    const GLint lAte = glGetUniformLocation(g_prog, "uAte"), lAtst = glGetUniformLocation(g_prog, "uAtst"), lAref = glGetUniformLocation(g_prog, "uAref");
-    const GLint lAfail = glGetUniformLocation(g_prog, "uAfail"), lRt = glGetUniformLocation(g_prog, "uRt"), lFb = glGetUniformLocation(g_prog, "uFb");
-    const GLint lScaleX = glGetUniformLocation(g_prog, "uScaleX");
-    const GLint lScrTex = glGetUniformLocation(g_prog, "uScrTex"), lDate = glGetUniformLocation(g_prog, "uDate"), lDatm = glGetUniformLocation(g_prog, "uDatm");
-    const GLint lScrMap = glGetUniformLocation(g_prog, "uScrMap");
-    glUniform1i(glGetUniformLocation(g_prog, "uScreen"), 1);
-    glUniform1i(glGetUniformLocation(g_prog, "uMip1"), 2);
-    glUniform1i(glGetUniformLocation(g_prog, "uMip2"), 3);
-    glUniform1i(glGetUniformLocation(g_prog, "uMip3"), 4);
-    const GLint lMipN = glGetUniformLocation(g_prog, "uMipN"), lMipLo = glGetUniformLocation(g_prog, "uMipLo");
-    const GLint lMipLcm = glGetUniformLocation(g_prog, "uMipLcm"), lMipMxl = glGetUniformLocation(g_prog, "uMipMxl");
-    const GLint lMipK = glGetUniformLocation(g_prog, "uMipK"), lMipL = glGetUniformLocation(g_prog, "uMipL");
+    const GLint lTme = g_loc.tme, lTfx = g_loc.tfx, lTcc = g_loc.tcc;
+    const GLint lAte = g_loc.ate, lAtst = g_loc.atst, lAref = g_loc.aref;
+    const GLint lAfail = g_loc.afail, lRt = g_loc.rt, lFb = g_loc.fb;
+    const GLint lScaleX = g_loc.scale_x;
+    const GLint lScrTex = g_loc.scr_tex, lDate = g_loc.date, lDatm = g_loc.datm;
+    const GLint lScrMap = g_loc.scr_map;
+    const GLint lMipN = g_loc.mip_n, lMipLo = g_loc.mip_lo;
+    const GLint lMipLcm = g_loc.mip_lcm, lMipMxl = g_loc.mip_mxl;
+    const GLint lMipK = g_loc.mip_k, lMipL = g_loc.mip_l;
+    glUniform2f(lFb, FB_W, FB_H);
     glUniform1f(lScaleX, v.xscale);
     glViewport(v.x, v.y, v.w, v.h);
     GLint screen_fbo = 0;
@@ -397,11 +436,10 @@ void draw(const Gs& gs, int win_w, int win_h, float FB_W, float FB_H, const Dept
         // (the Z pass first, then the colour against it with LEQUAL: an opaque part's own back faces stay hidden as the GS's per-primitive Z
         // writes hide them; a pixel failing the test writes no Z, so what is drawn after it inside a translucent shell still shows)
         if (split) {
-            static const GLint lPass = glGetUniformLocation(g_prog, "uPass");
             glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-            glUniform1i(lPass, 1);
+            glUniform1i(g_loc.pass, 1);
             glDrawArrays(batch_mode, static_cast<GLint>(vbo_off / sizeof(V)), static_cast<GLsizei>(batch.size()));
-            glUniform1i(lPass, 0);
+            glUniform1i(g_loc.pass, 0);
             const std::uint32_t m = applied.fbmsk;
             glColorMask((m & 0xffu) != 0xffu, (m & 0xff00u) != 0xff00u, (m & 0xff0000u) != 0xff0000u, (m & 0xff000000u) != 0xff000000u);
             glDepthMask(GL_FALSE);
@@ -763,8 +801,8 @@ void draw(const Gs& gs, int win_w, int win_h, float FB_W, float FB_H, const Dept
             }
             if (chg(&Key::sx)) glUniform1f(lScaleX, sx);
             if (chg(&Key::tme)) glUniform1i(lTme, k.tme);
-            if (chg(&Key::fge)) glUniform1i(glGetUniformLocation(g_prog, "uFge"), k.fge);
-            if (chg(&Key::fogcol)) glUniform3f(glGetUniformLocation(g_prog, "uFogCol"), static_cast<float>(k.fogcol & 0xff) / 255.0f, static_cast<float>((k.fogcol >> 8) & 0xff) / 255.0f, static_cast<float>((k.fogcol >> 16) & 0xff) / 255.0f);
+            if (chg(&Key::fge)) glUniform1i(g_loc.fge, k.fge);
+            if (chg(&Key::fogcol)) glUniform3f(g_loc.fog_col, static_cast<float>(k.fogcol & 0xff) / 255.0f, static_cast<float>((k.fogcol >> 8) & 0xff) / 255.0f, static_cast<float>((k.fogcol >> 16) & 0xff) / 255.0f);
             if (chg(&Key::tfx)) glUniform1i(lTfx, k.tfx);
             if (chg(&Key::tcc)) glUniform1i(lTcc, k.tcc);
             if (chg(&Key::ate)) glUniform1i(lAte, k.ate);
@@ -846,23 +884,7 @@ void draw(const Gs& gs, int win_w, int win_h, float FB_W, float FB_H, const Dept
             if (chg(&Key::mip_k)) glUniform1f(lMipK, k.mip_k);
             if (chg(&Key::mip_l)) glUniform1f(lMipL, k.mip_l);
             if (chg(&Key::blend) || chg(&Key::alpha) || chg(&Key::to_rt)) {
-                blend_state(st);
-                // the GS writes the source alpha to the frame (no blending of the alpha channel)
-                if (to_rt && k.blend) {
-                    GLint srgb = 0, drgb = 0;
-                    glGetIntegerv(GL_BLEND_SRC_RGB, &srgb);
-                    glGetIntegerv(GL_BLEND_DST_RGB, &drgb);
-                    // the colour blended by As as the GS reads it (0x80 = 1.0): the render target's FragColor holds the raw alpha
-                    // (0x80 = 0.5), the blend's factor is FragFactor's. With the raw alpha a layer blended at As 0x80 into a
-                    // render target was drawn at half strength: the ship's planet menu, the planet's picture (three layers, the
-                    // last one painting the background round the planet's disc) showed the square of its layers (issue #18)
-                    auto as_gs = [](GLint f) -> GLenum {
-                        if (f == GL_SRC_ALPHA) return GL_SRC1_ALPHA;
-                        if (f == GL_ONE_MINUS_SRC_ALPHA) return GL_ONE_MINUS_SRC1_ALPHA;
-                        return static_cast<GLenum>(f);
-                    };
-                    glBlendFuncSeparate(as_gs(srgb), as_gs(drgb), GL_ONE, GL_ZERO);
-                }
+                blend_state(st, to_rt);
             }
             if (chg(&Key::ztest) || chg(&Key::ztst) || chg(&Key::zwrite)) {
                 if (ztest) {
