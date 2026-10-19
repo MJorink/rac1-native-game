@@ -5,11 +5,16 @@ What changed in each release. Releases are source only: you build the game with 
 
 ## Unreleased
 
+### The launcher (Windows and Linux)
+- **The launcher**: one file to download and open, attached to each release, `rac1-launcher.exe`
+  for Windows and `rac1-launcher-linux-x64` for Linux. It downloads the game, sets it up from your
+  disc image, updates it (and itself), starts it, and backs up, restores and deletes saves. It
+  follows the update channel (stable releases, or development: `main`), the same setting as the
+  game's own. On Linux it offers to install the packages the build needs (your desktop asks for your
+  password). When the game closes right after starting, it shows why. See
+  [The launcher](docs/launcher.md).
+
 ### Windows
-- **The launcher**, `rac1-launcher.exe`: one file to download and double-click, attached to each
-  release. It downloads the game, sets it up from your disc image, updates it (and itself), starts
-  it, and backs up, restores and deletes saves. It follows the update channel (stable releases, or
-  development: `main`), the same setting as the game's own. See [The launcher](docs/launcher.md).
 - The game no longer drops `RAC1_PYTHON`, which the setup sets for the game's setup mode.
 
 ### Updating (`--update`, all systems)

@@ -6,8 +6,8 @@
 /.toolchain
 
 # Build output (and the launcher's, tools/launcher/)
-/tools/launcher/bin/
-/tools/launcher/obj/
+/tools/launcher/*/bin/
+/tools/launcher/*/obj/
 build/
 build-*/
 cmake-build-*/

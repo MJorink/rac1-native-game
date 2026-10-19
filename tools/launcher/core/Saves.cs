@@ -1,12 +1,11 @@
-// The saves (docs/saves.md): the virtual memory card's folder, %APPDATA%\rac1-native\memcard (or
-// RAC1_MEMCARD_DIR), with one folder per disc (BASCUS-97199RATCHET, BESCES-50916RATCHET) holding save0.bin to
+// The saves (docs/saves.md): the virtual memory card's folder, %APPDATA%\rac1-native\memcard on Windows,
+// ~/.local/share/rac1-native/memcard on Linux (or RAC1_MEMCARD_DIR), with one folder per disc (BASCUS-97199RATCHET, BESCES-50916RATCHET) holding save0.bin to
 // save4.bin, the five slots, each with its PC settings in save<N>.pc.
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using Microsoft.VisualBasic.FileIO;
 
 namespace Rac1Launcher
 {
@@ -26,11 +25,11 @@ namespace Rac1Launcher
             get
             {
                 string env = Environment.GetEnvironmentVariable("RAC1_MEMCARD_DIR");
-                return !string.IsNullOrEmpty(env) ? env : Path.Combine(Settings.ConfigDir, "memcard");
+                return !string.IsNullOrEmpty(env) ? env : Path.Combine(Platform.DataDir, "memcard");
             }
         }
 
-        public static string BackupDir => Path.Combine(Settings.ConfigDir, "save-backups");
+        public static string BackupDir => Path.Combine(Platform.DataDir, "save-backups");
 
         static string RegionName(string folder)
         {
@@ -90,12 +89,12 @@ namespace Rac1Launcher
             }
         }
 
-        /// <summary>A slot's save and its PC settings to the Recycle Bin (so it can still be brought back).</summary>
+        /// <summary>A slot's save and its PC settings to the Recycle Bin or the trash (so it can still be brought back).</summary>
         public static void Delete(SaveSlot s)
         {
             foreach (var f in new[] { s.File, Path.ChangeExtension(s.File, ".pc") })
                 if (File.Exists(f))
-                    FileSystem.DeleteFile(f, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
+                    Platform.Trash(f);
         }
     }
 }

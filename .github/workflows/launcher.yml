@@ -1,6 +1,8 @@
-# The Windows launcher (tools/launcher/, docs/launcher.md): built at each push, and attached to each release as
-# rac1-launcher.exe, the one file Windows players download (and which updates itself from the latest release's).
-# Its version is the release's (project(... VERSION) in CMakeLists.txt).
+# The launchers (tools/launcher/, docs/launcher.md): built at each push, and attached to each release, the one file
+# players download (and which updates itself from the latest release's):
+#   rac1-launcher.exe         Windows (.NET Framework 4.8, tools/launcher/windows/)
+#   rac1-launcher-linux-x64   Linux (.NET 8 and Avalonia in the file, tools/launcher/linux/)
+# Their version is the release's (project(... VERSION) in CMakeLists.txt).
 name: launcher
 
 on:
@@ -19,8 +21,8 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build rac1-launcher.exe
+  windows:
+    name: Windows (rac1-launcher.exe)
     runs-on: windows-2022
     permissions:
       contents: write  # (gh release upload, on a release)
@@ -36,13 +38,41 @@ jobs:
           $m = Select-String -Path CMakeLists.txt -Pattern 'project\(\s*rac1-native\s+VERSION\s+(\d+\.\d+\.\d+)'
           "version=$($m.Matches[0].Groups[1].Value)" >> $env:GITHUB_OUTPUT
       - name: Build
-        run: dotnet build tools/launcher/Launcher.csproj -c Release -p:LauncherVersion=${{ steps.version.outputs.version }} -o out
+        run: dotnet build tools/launcher/windows/Launcher.csproj -c Release -p:LauncherVersion=${{ steps.version.outputs.version }} -o out
       - uses: actions/upload-artifact@v4
         with:
-          name: rac1-launcher
+          name: rac1-launcher-windows
           path: out/rac1-launcher.exe
       - name: Attach to the release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.event.release.tag_name }}" out/rac1-launcher.exe --clobber
+
+  linux:
+    name: Linux (rac1-launcher-linux-x64)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Version
+        id: version
+        run: echo "version=$(grep -oP 'project\(\s*rac1-native\s+VERSION\s+\K[0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+      - name: Build
+        run: |
+          dotnet publish tools/launcher/linux/Launcher.Linux.csproj -c Release -p:LauncherVersion=${{ steps.version.outputs.version }} -o out
+          mv out/rac1-launcher out/rac1-launcher-linux-x64
+          chmod +x out/rac1-launcher-linux-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rac1-launcher-linux
+          path: out/rac1-launcher-linux-x64
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" out/rac1-launcher-linux-x64 --clobber

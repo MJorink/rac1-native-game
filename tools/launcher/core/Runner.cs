@@ -1,6 +1,7 @@
-// Runs the setup's programs (PowerShell for the tools, Python for tools\setup.py) without a console window, their
-// output line by line to the launcher, all of them in a Windows job: Cancel, or closing the launcher, ends the
-// whole tree (pacman, CMake, the compilers, the game's --setup) and leaves nothing running behind.
+// Runs the setup's programs (PowerShell for the tools, Python for tools/setup.py) without a console window, their
+// output line by line to the launcher. Cancel, or closing the launcher, ends the whole tree (pacman, CMake, the
+// compilers, the game's --setup) and leaves nothing running behind: on Windows all of them are in a job (which also
+// ends them if the launcher itself is ended), on Linux the tree of the program running is killed.
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -13,9 +14,10 @@ namespace Rac1Launcher
 {
     sealed class Runner : IDisposable
     {
-        readonly IntPtr job;
         volatile bool cancelled;
         public bool Cancelled => cancelled;
+#if WINDOWS_LAUNCHER
+        readonly IntPtr job;
 
         public Runner()
         {
@@ -31,6 +33,9 @@ namespace Rac1Launcher
             }
             finally { Marshal.FreeHGlobal(p); }
         }
+#else
+        volatile Process running;
+#endif
 
         /// <summary>Runs a program to its end; each line of its output (stdout and stderr) to onLine. Returns its exit
         /// code (-1 when cancelled).</summary>
@@ -65,7 +70,12 @@ namespace Rac1Launcher
                 proc.ErrorDataReceived += (s, e) => { if (e.Data == null) done.Signal(); else onLine(e.Data); };
                 try { proc.Start(); }
                 catch (Win32Exception e) { onLine($"ERROR  Could not start {exe}: {e.Message}"); return -2; }
+#if WINDOWS_LAUNCHER
                 AssignProcessToJobObject(job, proc.Handle);
+#else
+                running = proc;
+                if (cancelled) Kill(proc);
+#endif
                 proc.StandardInput.Close();
                 proc.BeginOutputReadLine();
                 proc.BeginErrorReadLine();
@@ -78,11 +88,27 @@ namespace Rac1Launcher
         public void Cancel()
         {
             cancelled = true;
+#if WINDOWS_LAUNCHER
             TerminateJobObject(job, 1);
         }
 
         public void Dispose() => CloseHandle(job);
+#else
+            var p = running;
+            if (p != null) Kill(p);
+        }
 
+        static void Kill(Process p)
+        {
+            try { p.Kill(true); }
+            catch (InvalidOperationException) { }  // (already ended)
+            catch (Win32Exception) { }
+        }
+
+        public void Dispose() { }
+#endif
+
+#if WINDOWS_LAUNCHER
         [StructLayout(LayoutKind.Sequential)]
         struct JOBOBJECT_BASIC_LIMIT_INFORMATION
         {
@@ -119,5 +145,6 @@ namespace Rac1Launcher
         static extern bool TerminateJobObject(IntPtr job, uint exitCode);
         [DllImport("kernel32.dll")]
         static extern bool CloseHandle(IntPtr handle);
+#endif
     }
 }

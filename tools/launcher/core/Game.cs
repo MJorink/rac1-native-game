@@ -19,8 +19,7 @@ namespace Rac1Launcher
         public string Iso = "";
         public int Jobs;  // (0: the setup's own choice)
 
-        public static string ConfigDir =>
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "rac1-native");
+        public static string ConfigDir => Platform.ConfigDir;
         static string FilePath => Path.Combine(ConfigDir, "launcher.txt");
 
         public static Settings Load()
@@ -111,10 +110,8 @@ namespace Rac1Launcher
 
         public string P(params string[] parts) => Path.Combine(new[] { Dir }.Concat(parts).ToArray());
         public bool Downloaded => File.Exists(P("tools", "setup.py")) && File.Exists(P("CMakeLists.txt"));
-        public string Exe => P("build", "rac1-native.exe");
+        public string Exe => P("build", Platform.ExeName);
         public bool Built => File.Exists(Exe);
-        public string Python => P(".toolchain", "msys64", "clang64", "bin", "python.exe");
-        public string ClangBin => P(".toolchain", "msys64", "clang64", "bin");
         public string ToolchainScript => P("tools", "windows", "toolchain.ps1");
         public bool IsGitClone => Directory.Exists(P(".git"));
 
@@ -173,16 +170,6 @@ namespace Rac1Launcher
             return null;
         }
 
-        /// <summary>Where the launcher puts the game when it was never told: a folder of the player's own, and one
-        /// without spaces or other letters than plain ASCII where it can (the build's tools like those best).</summary>
-        public static string DefaultDir()
-        {
-            string local = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "rac1-native");
-            if (Plain(local)) return local;
-            string drive = Path.GetPathRoot(Environment.GetFolderPath(Environment.SpecialFolder.Windows)) ?? @"C:\";
-            return Path.Combine(drive, "rac1-native");
-        }
-
         public static bool Plain(string path) => path.All(c => c < 128 && c != ' ' && c != '&' && c != '%' && c != '!');
     }
 
@@ -214,7 +201,7 @@ namespace Rac1Launcher
             public string Tag = "";
             public Version Version;
             public string Notes = "";
-            public string LauncherUrl;  // (the release's rac1-launcher.exe, when it has one)
+            public string LauncherUrl;  // (the release's launcher for this system, Platform.LauncherAsset, when it has one)
         }
 
         /// <summary>The latest release (throws when GitHub cannot be reached).</summary>
@@ -229,7 +216,7 @@ namespace Rac1Launcher
             var m = Regex.Match(r.Tag, @"(\d+)\.(\d+)\.(\d+)");
             if (m.Success) r.Version = new Version(m.Value);
             r.Notes = JsonString(json, "body") ?? "";
-            var a = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*/rac1-launcher\\.exe)\"");
+            var a = Regex.Match(json, "\"browser_download_url\"\\s*:\\s*\"([^\"]*/" + Regex.Escape(Platform.LauncherAsset) + ")\"");
             if (a.Success) r.LauncherUrl = a.Groups[1].Value;
             if (r.Tag == "") throw new InvalidDataException("GitHub's answer has no release tag");
             return r;
@@ -315,6 +302,11 @@ namespace Rac1Launcher
                     if (!dst.StartsWith(Path.GetFullPath(dir), StringComparison.OrdinalIgnoreCase)) continue;
                     Directory.CreateDirectory(Path.GetDirectoryName(dst));
                     e.ExtractToFile(dst, true);
+#if !WINDOWS_LAUNCHER
+                    // (the files' Unix modes, in the zip's external attributes: ./setup.sh and the tools' scripts executable)
+                    int mode = (e.ExternalAttributes >> 16) & 0x1ff;
+                    if (mode != 0) File.SetUnixFileMode(dst, (UnixFileMode)mode);
+#endif
                     if (!rel.Contains("__pycache__"))
                         hashes[rel] = BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(dst))).Replace("-", "").ToLowerInvariant();
                 }
