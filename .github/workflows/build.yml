@@ -1,4 +1,4 @@
-# Builds rac1-native on Linux and Windows, without the player's disc.
+# Builds rac1-native on Linux (x86-64, and ARM64 not blocking yet) and Windows, without the player's disc.
 #
 # Part of the game's code is generated from the game's own code on the player's disc (./setup.sh, see
 # docs/architecture.md), and no disc is here: these builds use -DRAC1_NO_GENERATED=ON, which compiles
@@ -32,6 +32,25 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DRAC1_NO_GENERATED=ON
       - name: Build
         run: cmake --build build -j 4
+
+  linux-arm64:
+    # (not blocking yet: the ARM64 port is in progress - #78, branch port/android - and parts of the PS2 layer still include
+    # x86 intrinsics; it shows where a change breaks ARM64 builds. Make it blocking once it builds)
+    name: Linux ARM64 (GCC, not blocking yet)
+    runs-on: ubuntu-24.04-arm
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the build's dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++ pkg-config libgl-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
+            libwayland-dev libxkbcommon-dev
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DRAC1_NO_GENERATED=ON
+      - name: Build
+        run: cmake --build build -j 4 -k 0
 
   windows:
     name: Windows (MSYS2 CLANG64, clang)
