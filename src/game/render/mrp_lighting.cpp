@@ -867,7 +867,16 @@ void main() {
     float noise2 = fract(52.9829189 * fract(dot(gl_FragCoord.xy + vec2(17.0, 31.0), vec2(0.06711056, 0.00583715))));
     vec3 t = normalize(abs(N.z) < 0.9 ? cross(N, vec3(0.0, 0.0, 1.0)) : cross(N, vec3(1.0, 0.0, 0.0)));
     vec3 b = cross(N, t);
-    float R = uParam.x, invR2 = 1.0 / max(R * R, 1e-4);
+    float R = uParam.x;
+    {  // (the reach capped on the screen: a surface near the camera looks no further than 4 % of the view's height - the taps
+       // far apart on the screen were most of the cost, for an occlusion that hardly changes)
+        vec4 c0 = uVP * vec4(P, 1.0), c1 = uVP * vec4(P + b * R, 1.0);
+        if (c0.w > 0.0 && c1.w > 0.0) {
+            float px = length(c1.xy / c1.w - c0.xy / c0.w) * 0.5;
+            if (px > 0.04) R *= 0.04 / px;
+        }
+    }
+    float invR2 = 1.0 / max(R * R, 1e-4);
 
     if (mode <= 2) {
         float a = 6.2831853 * noise;
@@ -972,9 +981,9 @@ void main() {
                 }
             }
         }
-        float a1 = acos(clamp(h1, -1.0, 1.0));
-        float a2 = acos(clamp(h2, -1.0, 1.0));
-        float slice_vis = 0.5 * ((1.0 - cos(a1)) + (1.0 - cos(a2)));
+        // (h: the sine of each side's horizon's elevation over the surface's plane; the cosine-weighted share of a side's quarter
+        // circle above its horizon is 1 - sin(elevation): a free side 1, a wall up to the normal 0)
+        float slice_vis = 0.5 * ((1.0 - max(h1, 0.0)) + (1.0 - max(h2, 0.0)));
         vis += clamp(slice_vis, 0.0, 1.0);
     }
     vis /= float(D);
@@ -1513,6 +1522,14 @@ void mrp_lighting_ao_pass() {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(rfb));  // (the read buffer is the bound read framebuffer's: rfb's, not the probe's)
     glReadBuffer(static_cast<GLenum>(prev_rb));
 
+    static const bool ao_prof = std::getenv("RAC1_AO_PROF") != nullptr;  // (testing: the occlusion's GPU time)
+    static GLuint ao_q = 0;
+    static double ao_acc = 0.0;
+    static int ao_n = 0;
+    if (ao_prof && g_ao != 0) {
+        if (ao_q == 0) glGenQueries(1, &ao_q);
+        glBeginQuery(GL_TIME_ELAPSED, ao_q);
+    }
     if (g_ao != 0) {
         Ao& A = g_ao_s;
         const int w = vp[2], h = vp[3];
@@ -1609,7 +1626,15 @@ void mrp_lighting_ao_pass() {
         float vpf[16];
         mrp_world_view_proj(vpf);
         const glm::mat4 VP = glm::make_mat4(vpf), IVP = glm::inverse(VP);
-        static const float radius = static_cast<float>(env_int("RAC1_AO_RADIUS", 90)) / 100.0f, strength = static_cast<float>(env_int("RAC1_AO_STRENGTH", 70)) / 100.0f;  // (testing)
+        // the radius (world units) and strength per mode. Until 0.4.x every mode used 0.9 units and 70 %: on these scenes (a crate
+        // about 2 units, Ratchet about 1.5, buildings tens) that darkened 1 to 2 levels of 255 on average, so the five modes looked
+        // the same (and none showed). The sphere-sampling modes 1.5 units, the horizon-based ones 3 (their falloff is smoother);
+        // RAC1_AO_RADIUS / RAC1_AO_STRENGTH (percent, testing) override them
+        static const int env_r = env_int("RAC1_AO_RADIUS", -1), env_s = env_int("RAC1_AO_STRENGTH", -1);
+        static const float kRadius[6] = {0.0f, 1.5f, 1.5f, 3.0f, 3.0f, 3.0f}, kStrength[6] = {0.0f, 1.0f, 1.2f, 2.0f, 2.5f, 2.5f};
+        const int mi = std::clamp(g_ao, 1, 5);
+        const float radius = env_r >= 0 ? static_cast<float>(env_r) / 100.0f : kRadius[mi];
+        const float strength = env_s >= 0 ? static_cast<float>(env_s) / 100.0f : kStrength[mi];
         const int shader_mode = (g_ao >= 5) ? 4 : g_ao;
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, A.afbo);
         glViewport(0, 0, aw, ah);
@@ -1625,6 +1650,32 @@ void mrp_lighting_ao_pass() {
         glUniform4f(A.u_param, radius, strength, 0.02f, static_cast<float>(shader_mode));
         glDrawArrays(GL_TRIANGLES, 0, 3);
 
+        if (std::getenv("RAC1_AO_DUMP") != nullptr) {  // (testing: the raw occlusion, ao_<mode>.pgm written every frame - the last one stays -, its stats every 60)
+            static int n = 0;
+            ++n;
+            {
+                std::vector<uint8_t> px(static_cast<size_t>(aw) * ah);
+                glBindTexture(GL_TEXTURE_2D, A.atex);
+                glPixelStorei(GL_PACK_ALIGNMENT, 1);
+                glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_UNSIGNED_BYTE, px.data());
+                glPixelStorei(GL_PACK_ALIGNMENT, 4);
+                char fn[64];
+                std::snprintf(fn, sizeof fn, "ao_%d.pgm", g_ao);
+                if (FILE* f = std::fopen(fn, "wb")) {
+                    std::fprintf(f, "P5 %d %d 255\n", aw, ah);
+                    for (int y = ah - 1; y >= 0; --y) std::fwrite(px.data() + static_cast<size_t>(y) * aw, 1, static_cast<size_t>(aw), f);
+                    std::fclose(f);
+                }
+                double sum = 0.0;
+                int dark = 0;
+                for (uint8_t v : px) {
+                    sum += v;
+                    dark += v < 200 ? 1 : 0;
+                }
+                if (n % 60 == 0) std::printf("[ao] mode %d (shader %d) %dx%d: mean %.1f / 255, %.1f %% under 200; radius %.2f strength %.2f\n", g_ao, shader_mode, aw, ah,
+                            sum / static_cast<double>(px.size()), 100.0 * dark / static_cast<double>(px.size()), radius, strength);
+            }
+        }
         glActiveTexture(GL_TEXTURE1);
         glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex1);
         if (g_ao == 1) {
@@ -1668,6 +1719,17 @@ void mrp_lighting_ao_pass() {
         glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev_tex));
         glDepthMask(dmask);
         glBlendFuncSeparate(static_cast<GLenum>(bsrc), static_cast<GLenum>(bdst), static_cast<GLenum>(bsrca), static_cast<GLenum>(bdsta));
+    }
+    if (ao_prof && g_ao != 0) {
+        glEndQuery(GL_TIME_ELAPSED);
+        GLuint64 ns = 0;
+        glGetQueryObjectui64v(ao_q, GL_QUERY_RESULT, &ns);
+        ao_acc += static_cast<double>(ns) * 1e-6;
+        if (++ao_n == 60) {
+            std::printf("[ao] mode %d: GPU %.3f ms a frame (%dx%d)\n", g_ao, ao_acc / ao_n, vp[2], vp[3]);
+            ao_acc = 0.0;
+            ao_n = 0;
+        }
     }
     if (g_sun_rays > 0) {  // the sun's rays (their own textures; the blending and the bindings put back)
         GLint bsrc = 0, bdst = 0, bsrca = 0, bdsta = 0, t0 = 0, t1 = 0;
