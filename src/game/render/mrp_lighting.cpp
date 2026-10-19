@@ -677,12 +677,13 @@ vec3 world(vec2 uv, float d) {
 }
 void main() {
     float d = texture(uDepth, vUv).r;
-    if (d >= 1.0) { FragAo = 1.0; return; }
     vec3 P = world(vUv, d);
+    vec3 dPdx = dFdx(P), dPdy = dFdy(P);  // (before any return: derivatives in non-uniform control flow are undefined)
+    if (d >= 1.0) { FragAo = 1.0; return; }
     int mode = int(uParam.w + 0.5);
     vec3 N;
     if (mode <= 1) {
-        N = cross(dFdx(P), dFdy(P));
+        N = cross(dPdx, dPdy);
     } else {
         vec2 texel = 1.0 / vec2(textureSize(uDepth, 0));
         float dr = texture(uDepth, vUv + vec2(texel.x, 0.0)).r;
@@ -690,9 +691,9 @@ void main() {
         float du = texture(uDepth, vUv + vec2(0.0, texel.y)).r;
         float dd = texture(uDepth, vUv - vec2(0.0, texel.y)).r;
         vec3 dPx = (abs(dr - d) < abs(d - dl) && dr < 1.0) ? (world(vUv + vec2(texel.x, 0.0), dr) - P)
-                                                            : (dl < 1.0 ? (P - world(vUv - vec2(texel.x, 0.0), dl)) : dFdx(P));
+                                                            : (dl < 1.0 ? (P - world(vUv - vec2(texel.x, 0.0), dl)) : dPdx);
         vec3 dPy = (abs(du - d) < abs(d - dd) && du < 1.0) ? (world(vUv + vec2(0.0, texel.y), du) - P)
-                                                            : (dd < 1.0 ? (P - world(vUv - vec2(0.0, texel.y), dd)) : dFdy(P));
+                                                            : (dd < 1.0 ? (P - world(vUv - vec2(0.0, texel.y), dd)) : dPdy);
         N = cross(dPx, dPy);
     }
     if (dot(N, N) < 1e-12) { FragAo = 1.0; return; }
@@ -1132,6 +1133,7 @@ void mrp_lighting_ao_pass() {
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev_t0));
     glActiveTexture(GL_TEXTURE0 + kUnit);
     glBindTexture(GL_TEXTURE_2D_ARRAY, static_cast<GLuint>(prev_t1));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(rfb));  // (the read buffer is the bound read framebuffer's: rfb's, not the probe's)
     glReadBuffer(static_cast<GLenum>(prev_rb));
 
     if (g_ao != 0) {

@@ -101,7 +101,9 @@ int32_t gs_exec_store_image(uint32_t lp, uint32_t dst) {
     const uint32_t w = rg & 0xfff, h = (rg >> 32) & 0xfff;
     // (host) the host puts in the local memory what the GS would hold there (the frame it drew: the replica draws none)
     if (gs::StoreImageHook hook = gs::store_image_hook(); hook != nullptr) hook(sbp, sbw, spsm);
-    if (spsm == 0 && dst < 0x02000000u && w * h * 4u <= 0x02000000u - dst) {
+    // (host) the 32-bit frame copied whole, as the loop below would; not under a journal (its pages would not be saved: the
+    // shadow runs, mrp_lod.h) nor for a null destination
+    if (spsm == 0 && dst != 0 && dst < 0x02000000u && w * h * 4u <= 0x02000000u - dst && ee_detail::g_jseen == nullptr) {
         const uint8_t* vram = g.vram();
         uint8_t* out = static_cast<uint8_t*>(ee_ram_ptr(dst));
         for (uint32_t y = 0; y < h; ++y) {

@@ -58,7 +58,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_2D_EDGES` | integer pixels; default off | Prints the 2D drawn within that many pixels of the frame's edges that the overscan crop applies to, with its box (how the crop's margins were chosen). |
 | `RAC1_ANIM_FIRST` | integer; default 0 | Only in the "animsheet" simulated-input script: the number of the first hero animation set to play (each set runs 16 frames), used to make animation contact sheets. |
 | `RAC1_ANIM_FREEZE` | set (any value) = on; default off | Only in the "animsheet" script: at frame 200 switches off the hero's own update so the forced animations play without the game moving him. |
-| `RAC1_AO` | integer, 0 = off, non-zero = on (the Options menu uses levels); default 0 (the Options > Graphics Ambient Occlusion setting is used unless this is set) | Forces the screen-space ambient occlusion pass on or off, overriding the menu setting, for comparison and testing. |
+| `RAC1_AO` | integer: 0 off, 1 SSAO, 2 SSAO+, 3 HBAO, 4 GTAO, 5 GTAO at half resolution; default 0 (the Options > Graphics Ambient Occlusion setting is used unless this is set) | Forces the ambient occlusion mode, overriding the menu setting, for comparison and testing. |
 | `RAC1_AO_RADIUS` | integer in hundredths; default 90 | Sets the sampling radius of the ambient occlusion pass (value divided by 100) for tuning. |
 | `RAC1_AO_STRENGTH` | integer in hundredths; default 70 | Sets the darkening strength of the ambient occlusion pass (value divided by 100) for tuning. |
 | `RAC1_AUDIO_DUMP` | file path; unset = no dump | Writes the game's sound output to the file as raw 48 kHz stereo signed 16-bit PCM. |

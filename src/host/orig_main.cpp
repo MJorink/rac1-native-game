@@ -814,8 +814,7 @@ struct ScenePicture {
             menu_pic = false;
         }
         if (!pf_valid || w != pf_w || h != pf_h) return;
-        pending = false;
-        pf_valid = false;
+        pending = false;  // (pf_valid kept: the store's next 16 KB blocks, 0x2a0f18's loop, read the same picture; the next frame shown ends it)
         LoadProf prof_all("the stored picture (libgraph's store)");
         // (the Scene frame is also the last frame shown: its read-back is the same picture)
         if (pf_fence != nullptr) glClientWaitSync(pf_fence, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ull);
