@@ -2,6 +2,7 @@
 #include <game/ovl/ovl_common.h>
 #include <game/ovl/ovl_reloc.h>
 #include <algorithm>
+#include <cstring>
 
 namespace rac1 {
 
@@ -146,6 +147,15 @@ static VuContact g_vu;
 // registers).
 // orig: (host) test support
 void collide_vu_reset() { g_vu = VuContact{}; }
+// The contact registers above (vf25..vf29: 15 floats) saved and put back whole: a host stretch that runs the game's code on a
+// journal of EE memory (mrp_lod.cpp's shadow runs) leaves them as it found them, as it leaves the memory.
+// orig: (host)
+void collide_vu_save(float out[15]) {
+    static_assert(sizeof(VuContact) == 15 * sizeof(float), "the five registers' x / y / z");
+    std::memcpy(out, &g_vu, sizeof(VuContact));
+}
+// orig: (host)
+void collide_vu_restore(const float in[15]) { std::memcpy(&g_vu, in, sizeof(VuContact)); }
 
 // orig: 0x001f3170 — sphere (pos, radius) against the collision mesh *(gp-0x75e8) in 1/64 units
 // (hand-written VU0 macro code on the scratchpad): bounding spheres select chunks, their vertices

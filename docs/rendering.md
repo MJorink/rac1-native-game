@@ -271,6 +271,18 @@ water grids of Rilgar, Umbris and other levels) are drawn by draw-list callbacks
 against the game's 4:3 clip matrix; those draw lists run as shadow blocks too, with that matrix
 widened, and the GS replica walks each shadow's chain in place of the real block's (several
 substitutes a frame). Before this, tiles at the sides of a widened view were missing.
+Many of those callbacks test their cells with the game's point test (0x2002e0), which reads its own
+copies of the projection's tangents (0x16cd00..0x16cd2f), and the quad drawer (0x1fd228) rejects a
+quad past about twice the 4:3 frame's half width: the shadow blocks widen those too (keeping the
+guard band the game clips at). Before this, at 32:9 Gaspar's lava was still cut in the outer part of
+each side, and the effect quads (Rilgar's water quads, glows) were rejected there. What is still cut: a surface a moby's update queues
+only when the moby pass drew that moby in the last frame (moby +0x31, the 4:3 view's decision, which
+the shadows cannot change without changing the game's state): one of Rilgar's water patches (class 79),
+the ships' cockpit glass.
+The shadow runs also put back the collision routines' contact registers (vf25..vf29, which the port
+keeps outside the VU0 state): the ship's shadow callback (0x28e670, queued near the parked ship)
+probes the ground, and a shadow that probed where the real block did not left them changed for the
+game's next collision.
 Before this, the game's state diverged on most frames of the Veldin intro when the view was widened;
 after it, its state is identical at 4:3 and at 5120x1440.
 

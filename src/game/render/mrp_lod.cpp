@@ -32,6 +32,11 @@
 
 namespace rac1 {
 
+// (ovl_1e_1f.cpp) the collision routines' contact registers vf25..vf29, which the port keeps outside the VU0 state: saved and
+// put back around each shadow run as the VU0 registers are
+void collide_vu_save(float out[15]);
+void collide_vu_restore(const float in[15]);
+
 int g_mrp_lod = 0;
 bool g_mrp_lod_widen_off = false;
 bool g_mrp_lod_frame_drawn = true;
@@ -170,6 +175,7 @@ struct ShadowPatch {
     int type = kPatchNone;
     float w = 1.0f, wy = 1.0f;
     float t_game = 0.0f, t_patched = 0.0f;  // the tangent 0x16caf0: the game's, and the shadow's widened one
+    float q_game = 0.0f, q_patched = 0.0f;  // (kPatchCull) the quad drawer's reject scale 0x160be4: the game's, the shadow's
 } g_patch;
 int g_patch_host = 0;  // the host's own patching calls the setups (not hooked)
 void patch_clear() { g_patch = ShadowPatch{}; }
@@ -211,13 +217,49 @@ void patch_widen(float w, int kind, float wy) {
 // at 0x16caf8 and its copy 0x16cc20 (as projection_setup computes it: measured 1.08235 for t = 0.414112) -, nothing else of the
 // projection: with projection_setup's whole output widened (its clip matrices 0x16cb00..) effects inside the 4:3 frame changed too
 // (Veldin's intro, frame 400: orange glows inside Ratchet's pod that neither the 4:3 image nor the game's own widened one shows).
-void patch_cull(float w) {
+// The frustum terms point_on_screen 0x2002e0 tests a point (and its radius) against - the draw lists' callbacks cull the cells of
+// the levels' water, lava and sand-sea grids with it (Gaspar's lava, class 317's L9:0x2ef750 -> 0x2c1978: a cell drawn when
+// point_on_screen(cell, 256) >= 0) -: projection_setup's copies at 0x16cd00 (the x / y tangents, then the radius factors
+// sqrt(1 + t^2)), 0x16cd10 (the guard band's factors: 4, the screen's half size over its centre) and 0x16cd20 (the radius
+// factors again, the guard test's radius scale). The sides' test (|x| - r x radius factor <= tangent x depth) widened by `w` / `wy`
+// (the tangents and both radius factors); the guard band's test (|x| + r x radius factor x 0x16cd28 <= tangent x guard factor x
+// depth: the point's projection inside the 4:3 projection's guard band, else 0: the callback's packets clipped) kept on the
+// game's guard band, its factor divided by the widening (a cell past it is clipped, as the game clips one: the shadow's packets
+// are projected with the game's own 4:3 projection). Before, the shadows widened only 0x16caf0 / 0x16caf8 / 0x16cc20, and those
+// cells were culled at the 4:3 sides: the lava, water and sand sea missing at the far sides of a 32:9 view.
+void patch_frustum_terms(float w, float wy) {
+    const float s[2] = {w, wy};
+    for (uint32_t k = 0; k < 2; ++k) {
+        if (!(s[k] > 1.0f)) continue;
+        const float t = lwc1(OV(0x0016cd00u) + 4 * k) * s[k];
+        const float r = std::sqrt(1.0f + t * t);
+        swc1(OV(0x0016cd00u) + 4 * k, t);
+        swc1(OV(0x0016cd08u) + 4 * k, r);
+        swc1(OV(0x0016cd20u) + 4 * k, r);
+        swc1(OV(0x0016cd10u) + 4 * k, lwc1(OV(0x0016cd10u) + 4 * k) / s[k]);
+    }
+}
+void patch_cull(float w, float wy) {
     const float t0 = lwc1(OV(0x0016caf0u));
-    const float t = t0 * w, r = std::sqrt(1.0f + t * t);
-    swc1(OV(0x0016caf0u), t);
-    swc1(OV(0x0016caf8u), r);
-    swc1(OV(0x0016cc20u), r);
-    g_patch = ShadowPatch{kPatchCull, w, 1.0f, t0, t};
+    const float t = w > 1.0f ? t0 * w : t0;
+    if (w > 1.0f) {
+        const float r = std::sqrt(1.0f + t * t);
+        swc1(OV(0x0016caf0u), t);
+        swc1(OV(0x0016caf8u), r);
+        swc1(OV(0x0016cc20u), r);
+    }
+    static const bool terms_off = std::getenv("RAC1_MRP_WIDEN_TERMS") != nullptr && std::atoi(std::getenv("RAC1_MRP_WIDEN_TERMS")) == 0;  // (testing: before)
+    // the quad drawer 0x1fd228 (the draw lists' effect quads: Rilgar's water, class 79's L5:0x2d7920; the glows, the decals) rejects a
+    // quad whose four corners are all past one side of the guard band 0x16cbc0 (1 / 1024, 1 / 832: the GS's half extents) scaled by
+    // 0x160be4 (1.5): +-683 pixels of the 4:3 frame's projection, which a 32:9 view's sides pass (+-883 at 5053 x 1371): the quads there
+    // were rejected, the water cut at the far sides. That scale divided by the widening (x and y share it: the larger); the guard band's
+    // own clipping (0x1fd89c) left as it is
+    float q = lwc1(OV(0x00160be4u));
+    if (g_patch.type == kPatchCull && q == g_patch.q_patched) q = g_patch.q_game;  // (a re-apply: the game's own)
+    const float qs = std::max(w, wy), qp = !terms_off && qs > 1.0f ? q / qs : q;
+    swc1(OV(0x00160be4u), qp);
+    if (!terms_off) patch_frustum_terms(w, wy);
+    g_patch = ShadowPatch{kPatchCull, w, wy, t0, t, q, qp};
 }
 // The sky (0x23d968) projects its shells itself with the frame's projection (render_view_setup 0x1f6e48: A 0x166d00 from
 // projection_setup 0x1f7980's matrices), and the MRP draws it as the directions A sees its screen points in: a 4:3 A covers
@@ -281,7 +323,7 @@ MrpLodSetupScope::~MrpLodSetupScope() {
     if (!view_) {  // the game's projection made: the shadow's patch put back on the tangent it used
         const float t = lwc1(OV(0x0016caf0u));
         if (g_patch.type == kPatchCull) {
-            patch_cull(g_patch.w);
+            patch_cull(g_patch.w, g_patch.wy);
         } else {
             widen_tangent(g_patch.w, g_patch.wy);
             g_patch = ShadowPatch{kPatchWiden, g_patch.w, g_patch.wy, t, lwc1(OV(0x0016caf0u))};
@@ -352,7 +394,9 @@ void probe(int kind) {
 
 std::vector<uint8_t> g_verify_ram, g_verify_spr;
 
+uint64_t g_collide_vu_put_back = 0;  // (the shadow runs that changed the collision's contact registers: put back)
 struct Vu0Save {
+    float coll[15];  // the collision routines' contact registers vf25..vf29, kept by the port outside the VU0 state
     std::array<VUVector, 32> vf;
     std::array<int16_t, 16> vi;
     VUVector acc;
@@ -366,6 +410,7 @@ struct Vu0Save {
     explicit Vu0Save(bool save_mem_and_micro) : full(save_mem_and_micro) {
         const vu0::Vu0& v = vu0::global();
         const VUState& s = v.st;
+        collide_vu_save(coll);
         vf = s.vf; vi = s.vi; acc = s.acc;
         q = s.q; i = s.i; r = s.r; p = s.p;
         macflag = s.macflag; statusflag = s.statusflag; clipflag = s.clipflag;
@@ -381,6 +426,12 @@ struct Vu0Save {
     void restore() const {
         vu0::Vu0& v = vu0::global();
         VUState& s = v.st;
+        {
+            float now[15];
+            collide_vu_save(now);
+            if (std::memcmp(now, coll, sizeof coll) != 0) ++g_collide_vu_put_back;
+            collide_vu_restore(coll);
+        }
         s.vf = vf; s.vi = vi; s.acc = acc;
         s.q = q; s.i = i; s.r = r; s.p = p;
         s.macflag = macflag; s.statusflag = statusflag; s.clipflag = clipflag;
@@ -635,7 +686,7 @@ void mrp_lod_effects_shadow(void (*pass)(), uint32_t cur) {
     const Vu0Save vu0_saved(true);  // (the block's VU0 macro / micro work)
     const auto hw_saved = eer::hwregs();
     ee_journal_begin();
-    if (!selftest) patch_cull(widen);  // (the particles' sphere test: vf26 / vf27)
+    if (!selftest) patch_cull(widen, fill_widen_y());  // (the particles' sphere test: vf26 / vf27; point_on_screen's terms)
     if (drawn_valid && !no_drawn && !selftest)
         for (const auto& [m, d] : g_ps.drawn) sb(m + 0x31, d);  // (the mobys drawn in the widened view: their glows)
     const uint32_t buf_b = lwu(OV(0x00173e08u)), limit = (cur >= buf_b ? buf_b : lwu(OV(0x00173e04u))) + lwu(OV(0x001611ccu));
@@ -712,7 +763,7 @@ void mrp_lod_list_shadow(int list, void (*block)(), uint32_t cur) {
     const Vu0Save vu0_saved(true);  // (the callbacks' VU0 macro / micro work)
     const auto hw_saved = eer::hwregs();
     ee_journal_begin();
-    if (widen > 1.0f) patch_cull(widen);  // (the sphere tests: vf26 / vf27)
+    patch_cull(widen, widen_y);  // (the sphere tests: vf26 / vf27; point_on_screen's terms)
     const uint32_t buf_b = lwu(OV(0x00173e08u)), limit = (cur >= buf_b ? buf_b : lwu(OV(0x00173e04u))) + lwu(OV(0x001611ccu));
     g_slot = list;
     g_slot_w = widen;
@@ -920,6 +971,8 @@ void mrp_lod_report() {
                     k == 0 ? "0x16dc80" : "0x16de80", static_cast<unsigned long long>(L.runs), static_cast<unsigned long long>(L.same), static_cast<unsigned long long>(L.overflow), L.ms / n,
                     static_cast<double>(L.bytes_total) / n, static_cast<double>(L.real_total) / n);
     }
+    if (g_collide_vu_put_back != 0)
+        std::printf("[lod] the collision's contact registers vf25..vf29 changed by %llu shadow runs: put back\n", static_cast<unsigned long long>(g_collide_vu_put_back));
     if (g_st.runs[0] + g_st.runs[1] + g_st.runs[2] + g_st.runs[3] + g_st.skipped_vu0 == 0) return;
     static const char* names[4] = {"tfrag", "tie", "shrub", "sky"};
     for (int k = 0; k < 4; ++k) {
