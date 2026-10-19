@@ -90,6 +90,7 @@ struct State {
     Cascade casc[kCascades];
     glm::vec3 sun{0.0f, 0.0f, 1.0f};  // toward the sun
     float sun_k = 1.0f;               // its shadows' weight (the zone's light's share; faded between zones)
+    glm::vec4 key{0.0f};              // the key light's colour (as the set holds it) and back-face factor: what a shadow takes off the world's colours
     int npts = 0;                     // the frame's active point lights: position, radius; colour
     glm::vec4 pt_pos[kMaxPts], pt_col[kMaxPts];  // (pt_col.w: the light's cube in the shadow array, -1 none)
     int pt_slot[kMaxPts] = {};                   // (the game's slot of each: its casters' view, 3 + slot; -1 an automatic emitter)
@@ -134,6 +135,7 @@ struct SetSun {
     glm::vec3 dir{0.0f, 0.0f, 1.0f};
     float weight = 0.0f;
     bool ok = false;
+    glm::vec4 key{0.0f};  // that light's colour (rgb as the set holds it: x 128 in the vertex colours' bytes) and back-face factor (w: the set's k)
 };
 SetSun set_sun(uint32_t set) {
     SetSun r;
@@ -157,6 +159,8 @@ SetSun set_sun(uint32_t set) {
     r.dir = glm::normalize(dir[pick]);
     r.weight = lum[pick] / best;
     r.ok = true;
+    const uint32_t c = base + 0x20 * static_cast<uint32_t>(pick);
+    r.key = glm::vec4(std::max(lwc1(c), 0.0f), std::max(lwc1(c + 4), 0.0f), std::max(lwc1(c + 8), 0.0f), std::clamp(lwc1(c + 0xc), 0.0f, 1.0f));
     return r;
 }
 
@@ -164,8 +168,9 @@ SetSun set_sun(uint32_t set) {
 // else the light sets the game lights the hero with - moby +0x38 / +0x39, blended by +0x3a / 256: the zone's
 // own key light, as Ratchet is lit (Veldin's outdoors set 0, its house set 1; Blarg's zones each their own) - each set's sun (set_sun),
 // the two blended. On Veldin's outdoors (-0.397, 0.852, -0.342): the low warm sun the sky shows (checked against the screenshots)
-glm::vec3 sun_direction(float* weight) {
+glm::vec3 sun_direction(float* weight, glm::vec4* key) {
     *weight = 1.0f;
+    *key = glm::vec4(0.0f);
     if (const char* e = std::getenv("RAC1_SUN_DIR")) {
         float x = 0, y = 0, z = 0;
         if (std::sscanf(e, "%f,%f,%f", &x, &y, &z) == 3 && x * x + y * y + z * z > 1e-6f) return glm::normalize(glm::vec3(x, y, z));
@@ -234,19 +239,99 @@ glm::vec3 sun_direction(float* weight) {
         const float wa = sa.ok ? sa.weight : 0.0f;
         const float wb = sb.ok ? sb.weight : 0.0f;
         *weight = wa + (wb - wa) * w;
+        *key = s0.key;
         return s0.dir;
     }
     if (sa.ok && sb.ok) {
         *weight = sa.weight + (sb.weight - sa.weight) * w;
+        *key = sa.key + (sb.key - sa.key) * w;
         return glm::normalize(sa.dir + (sb.dir - sa.dir) * w);
     }
     if (sa.ok || sb.ok) {
         const SetSun& s1 = sa.ok ? sa : sb;
         *weight = s1.weight * (sa.ok ? 1.0f - w : w);
+        *key = s1.key;
         return s1.dir;
     }
     *weight = 0.0f;
     return glm::normalize(glm::vec3(0.4f, -0.85f, 0.35f));
+}
+
+// orig: (host) testing, RAC1_TFRAG_LIGHT_TRACE=<every>[,x,y,z,r]: the terrain's lit colours near the hero (or that point) taken
+// apart as the game's relighting (world_tfrag_lighting 0x295350, world_render.md section 10) makes them - the vertex's base colour,
+// its light set's two directional terms (colour x max(n.l, k n.l)) - against the colour EE memory holds; and the sun's set
+void tfrag_light_trace() {
+    const char* e = std::getenv("RAC1_TFRAG_LIGHT_TRACE");
+    if (e == nullptr) return;
+    static uint64_t n = 0;
+    int every = 60;
+    float px = 0, py = 0, pz = 0, pr = 12.0f;
+    const int got = std::sscanf(e, "%d,%f,%f,%f,%f", &every, &px, &py, &pz, &pr);
+    if (n++ % static_cast<uint64_t>(std::max(1, every)) != 0) return;
+    if (got < 4) {
+        const uint32_t hero = lwu(OV(0x0015ffd8u));
+        if (hero == 0) return;
+        px = lwc1(hero + 0x10);
+        py = lwc1(hero + 0x14);
+        pz = lwc1(hero + 0x18);
+    }
+    const uint32_t table = lwu(OV(0x00160f4cu));
+    const int32_t count = lw(OV(0x00160f50u));
+    if (table == 0 || count <= 0 || count > 0x10000) return;
+    const uint32_t sets = OV(0x0017fec0u), norms = OV(0x00166080u);
+    auto set_term = [&](uint32_t set, const glm::vec3& nrm, int l) {  // (one light's term, 0..255 units: the routine's colours are 65536 + byte / 128)
+        const uint32_t c = sets + 0x40 * (set & 15) + 0x20 * static_cast<uint32_t>(l), d = c + 0x10;
+        const float k = lwc1(c + 0xc);
+        const float nd = -glm::dot(nrm, glm::vec3(lwc1(d), lwc1(d + 4), lwc1(d + 8)));  // (toward the light)
+        return glm::vec3(lwc1(c), lwc1(c + 4), lwc1(c + 8)) * (128.0f * std::max(nd, k * nd));
+    };
+    double sum_base = 0, sum_t[2] = {0, 0}, sum_lit = 0, sum_err = 0;
+    int verts = 0, back = 0, neg_key = 0;
+    std::map<uint32_t, int> set_use;
+    for (int32_t i = 0; i < count; ++i) {
+        const uint32_t ent = table + 0x40 * static_cast<uint32_t>(i);
+        const uint32_t data = lwu(ent + 0x10);
+        if (data == 0 || data >= 0x02000000u) continue;
+        const int8_t single = static_cast<int8_t>(lbu(ent + 0x34));  // (>= 0: one set for the whole entry, its count +0x29 pairs)
+        const uint32_t va = data + static_cast<uint32_t>(static_cast<int32_t>(lh(ent + 0x30))) + 0x10;
+        const uint32_t nv = single >= 0 ? 2u * lbu(ent + 0x29) : lbu(ent + 0x3c);
+        const uint32_t lit = data + lhu(ent + 0x1e);
+        const glm::vec3 base_pos(static_cast<float>(lw(va - 0x10)) / 1024.0f, static_cast<float>(lw(va - 0xc)) / 1024.0f, static_cast<float>(lw(va - 8)) / 1024.0f);
+        for (uint32_t v = 0; v < nv; ++v) {
+            const uint32_t vx = va + 8 * v;
+            const uint32_t po = data + lhu(vx);
+            const glm::vec3 p = base_pos + glm::vec3(lh(po), lh(po + 2), lh(po + 4)) / 1024.0f;
+            if (glm::length(p - glm::vec3(px, py, pz)) > pr) continue;
+            const uint32_t az = lbu(vx + 2), el = lbu(vx + 3);
+            const float ca = lwc1(norms + 8 * az), sa = lwc1(norms + 8 * az + 4), ce = lwc1(norms + 8 * el), se = lwc1(norms + 8 * el + 4);
+            const glm::vec3 nrm(ca * ce, sa * ce, se);
+            const uint16_t b5 = lhu(vx + 4), sh = lhu(vx + 6);
+            const glm::vec3 base(static_cast<float>((b5 & 31) << 3), static_cast<float>(((b5 >> 5) & 31) << 3), static_cast<float>(((b5 >> 10) & 31) << 3));
+            const uint32_t sa_ = single >= 0 ? static_cast<uint32_t>(single) : (sh & 15u), sb_ = single >= 0 ? sa_ : ((sh >> 4) & 15u);
+            const float wb = single >= 0 ? 0.0f : static_cast<float>(sh >> 8) / 256.0f;
+            glm::vec3 t[2];
+            for (int l = 0; l < 2; ++l) t[l] = set_term(sa_, nrm, l) * (1.0f - wb) + set_term(sb_, nrm, l) * wb;  // (approximate: the game blends the rows)
+            const glm::vec3 sum = glm::min(base + t[0] + t[1], glm::vec3(255.0f));
+            const uint32_t lc = lwu(lit + 4 * v);
+            const glm::vec3 got_c(static_cast<float>(lc & 0xff), static_cast<float>((lc >> 8) & 0xff), static_cast<float>((lc >> 16) & 0xff));
+            auto lum = [](const glm::vec3& x) { return (x.r + x.g + x.b) / 3.0; };
+            sum_base += lum(base);
+            sum_t[0] += lum(t[0]);
+            sum_t[1] += lum(t[1]);
+            sum_lit += lum(got_c);
+            sum_err += std::fabs(lum(sum) - lum(got_c));
+            back += glm::dot(nrm, g_sh.sun) <= 0.0f ? 1 : 0;
+            neg_key += lum(t[0]) < 0.0 ? 1 : 0;
+            ++set_use[sa_ | (sb_ << 4)];
+            ++verts;
+        }
+    }
+    if (verts == 0) return;
+    std::printf("[tfrag light] at %.1f %.1f %.1f r %.0f: %d vertices; mean (0..255) lit %.1f = base %.1f + light 1 %.1f + light 2 %.1f (recomposed off by %.1f); "
+                "facing away from the sun %d, light 1 negative %d; sets", px, py, pz, pr, verts, sum_lit / verts, sum_base / verts, sum_t[0] / verts, sum_t[1] / verts,
+                sum_err / verts, back, neg_key);
+    for (const auto& [k, c] : set_use) std::printf(" %u/%u:%d", k & 15, k >> 4, c);
+    std::printf("; sun (%.2f %.2f %.2f) weight %.2f\n", g_sh.sun.x, g_sh.sun.y, g_sh.sun.z, g_sh.sun_k);
 }
 
 void read_splits() {
@@ -296,18 +381,22 @@ void fit_cascades() {
     g_sh.cam = glm::vec3(g_sh.inv_view[3]);
     {  // the zone's sun: turned toward a new zone's at most 1 degree a frame, its shadows' weight faded (1 / 30 a frame)
         float tw = 0.0f;
-        const glm::vec3 target = sun_direction(&tw);
+        glm::vec4 tkey(0.0f);
+        const glm::vec3 target = sun_direction(&tw, &tkey);
         const float zone_w = tw;
         tw *= view_open();  // (a view covered from the sun: its shadows faded out, the cascades still drawn - the probe's)
         static glm::vec3 cur{0.0f, 0.0f, 1.0f};
         static float curw = 0.0f;
         static int32_t lvl = -1;
         const int32_t level = lw(0x0015ed84);
+        static glm::vec4 curkey{0.0f};
         if (level != lvl) {
             lvl = level;
             cur = target;
             curw = tw;
+            curkey = tkey;
         } else {
+            curkey += (tkey - curkey) * 0.1f;  // (a new zone's key light's colour: over about half a second)
             curw += std::clamp(tw - curw, -1.0f / 30.0f, 1.0f / 30.0f);
             if (curw <= 0.02f) {
                 cur = target;  // (unseen: at once)
@@ -319,6 +408,7 @@ void fit_cascades() {
         }
         g_sh.sun = cur;
         g_sh.sun_k = curw;
+        g_sh.key = curkey;
         g_has_sun.store(curw > 0.01f);
         g_casc_on.store(curw > 0.01f || zone_w > 0.01f);
     }
@@ -326,6 +416,7 @@ void fit_cascades() {
     g_cull_tan[0] = 1.0f / g_sh.proj.x;
     g_cull_tan[1] = 1.0f / g_sh.proj.y;
     g_sun_known.store(true);
+    tfrag_light_trace();
     const glm::vec3 up = std::fabs(g_sh.sun.z) > 0.95f ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::vec3(0.0f, 0.0f, 1.0f);
     const float tx = 1.0f / g_sh.proj.x, ty = 1.0f / g_sh.proj.y;
     float near_d = 0.1f;
@@ -756,10 +847,18 @@ struct Ao {
 // neighbours), tested against the cascades (one tap, a few texels toward the sun) when it faces the sun - a face turned away is
 // not counted, as the receivers do not shadow it -, the sky as seeing it. Read back the next frame (a pixel buffer): the sun's
 // weight is scaled by how much of the view sees the sun - none under kCoverLo, all over kCoverHi, the scale following it slowly
-// (kCoverRate a frame, about a second), then faded as between zones. In a room, the original's look (the mobys' drop shadows back);
-// outdoors, where the ground in the sun or the sky shows, the shadows as before.
+// (kCoverRate a frame, about a second), then faded as between zones. In a room, the original's look (the point lights and the
+// occlusion on top); outdoors, where the ground in the sun or the sky shows, the shadows as before.
+// Outdoors besides: where the camera is where the sky was in view (kSkySeen of the samples, any time since the level began),
+// the sun is kept whatever the view shows. Outdoors a camera often looks at nothing but shaded ground (down at Novalis's
+// start valley, all in the shade of its trees and of the plateau beside it): that view alone faded the sun out, the trees' and
+// Ratchet's shadows went and came back as the camera turned. A room shows no sky. The places are the camera's positions, one
+// every kSkyStep units, kSkyMax of them (the oldest dropped); within kSkyNear of one the sun is kept, beyond kSkyFar it is the
+// view's measure alone.
 constexpr int kProbeW = 64, kProbeH = 36;
 constexpr float kCoverLo = 0.05f, kCoverHi = 0.25f, kCoverRate = 0.03f;
+constexpr float kSkySeen = 0.05f, kSkyStep = 4.0f, kSkyNear = 12.0f, kSkyFar = 24.0f;
+constexpr size_t kSkyMax = 1024;
 const char* kProbeFs = R"(#version 460 core
 uniform sampler2D uDepth;
 uniform sampler2DArrayShadow uShMap;
@@ -804,6 +903,8 @@ struct Probe {
     int next = 0;
     GLint u_depth = -1, u_map = -1, u_casc = -1, u_part = -1, u_texel = -1, u_sun = -1, u_cam = -1, u_inv_vp = -1;
     float open = 1.0f, sky = 1.0f;  // the last measure: the counted samples' share that see the sun, the samples' share of sky
+    std::vector<glm::vec3> sky_at;  // where the camera was when the sky was in view (outdoors)
+    float outdoors = 1.0f;          // the last measure: 1 near one of them .. 0 away from all
     float k = 1.0f;                 // the sun's weight's scale (smoothed)
     int32_t level = -1;
 } g_probe;
@@ -822,6 +923,7 @@ void cover_probe(GLint fb, const int vp[4]) {
         P.k = 1.0f;
         P.open = P.sky = 1.0f;
         P.filled[0] = P.filled[1] = false;
+        P.sky_at.clear();
     }
     if (on == 0 || !g_casc_on.load()) {
         P.k = 1.0f;
@@ -870,14 +972,30 @@ void cover_probe(GLint fb, const int vp[4]) {
             glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
             P.open = counted > 0 ? static_cast<float>(lit) / (255.0f * static_cast<float>(counted)) : 1.0f;
             P.sky = static_cast<float>(sky) / static_cast<float>(kProbeW * kProbeH);
-            P.k += (std::clamp((P.open - kCoverLo) / (kCoverHi - kCoverLo), 0.0f, 1.0f) - P.k) * kCoverRate;
+            static const int sky_on = env_int("RAC1_SUN_COVER_SKY", 1);  // (testing: 0 the view alone, as in 0.4.0)
+            P.outdoors = 0.0f;
+            if (sky_on != 0) {
+                const glm::vec3 h = g_sh.cam;  // (the camera: Clank's or a vehicle's sections too)
+                float dmin = 1e30f;
+                for (const glm::vec3& q : P.sky_at) dmin = std::min(dmin, glm::length(q - h));
+                if (P.sky >= kSkySeen && dmin > kSkyStep) {
+                    if (P.sky_at.size() >= kSkyMax) P.sky_at.erase(P.sky_at.begin());
+                    P.sky_at.push_back(h);
+                    dmin = 0.0f;
+                }
+                P.outdoors = std::clamp((kSkyFar - dmin) / (kSkyFar - kSkyNear), 0.0f, 1.0f);
+            }
+            const float kv = std::clamp((P.open - kCoverLo) / (kCoverHi - kCoverLo), 0.0f, 1.0f);
+            P.k += (std::max(kv, P.outdoors) - P.k) * kCoverRate;
         }
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         P.filled[prev] = false;
     }
     if (trace) {
         static uint64_t n = 0;
-        if (n++ % 60 == 0) std::printf("[sun] cover probe: %.0f %% sees the sun, %.0f %% sky: the sun's weight x %.2f\n", 100.0f * P.open, 100.0f * P.sky, P.k);
+        if (n++ % 60 == 0)
+            std::printf("[sun] cover probe: %.0f %% sees the sun, %.0f %% sky, outdoors %.2f (%zu places): the sun's weight x %.2f\n", 100.0f * P.open, 100.0f * P.sky,
+                        P.outdoors, P.sky_at.size(), P.k);
     }
     // this frame's: the depth at 2 kProbeW x 2 kProbeH (a blit of the same format, nearest)
     GLenum fmt = P.dfmt;
@@ -1221,9 +1339,6 @@ bool mrp_user_lights_save() {
 
 // orig: (host) see mrp_lighting.h
 bool mrp_lighting_casters_wanted() { return g_casc_on.load() && (g_shadow_cache == 0 || g_sh.want.load()); }
-
-// orig: (host) see mrp_lighting.h
-bool mrp_lighting_has_sun() { return g_has_sun.load(); }
 
 // orig: (host) see mrp_lighting.h
 float mrp_lighting_caster_grow() { return g_shadow_cache != 0 ? kCacheGrow : 1.0f; }
@@ -1634,6 +1749,7 @@ ShadowLocs mrp_lighting_locs(unsigned prog) {
     l.range = glGetUniformLocation(p, "uShRange");
     l.fade = glGetUniformLocation(p, "uShFade");
     l.sun_k = glGetUniformLocation(p, "uShSunK");
+    l.key = glGetUniformLocation(p, "uShKey");
     l.debug = glGetUniformLocation(p, "uShDebug");
     l.pt_n = glGetUniformLocation(p, "uPtN");
     l.pt_pos = glGetUniformLocation(p, "uPtPos");
@@ -1686,6 +1802,12 @@ void mrp_lighting_bind_receiver(const ShadowLocs& l, bool sky) {
         glUniform3f(l.range, g_sh.casc[0].range, g_sh.casc[1].range, g_sh.casc[2].range);
         glUniform4f(l.fade, fd[0], fd[1], fd[2], g_shadow_fade != 0 ? 1.0f : 0.0f);
         glUniform1f(l.sun_k, g_sh.sun_k);
+        if (l.key >= 0) {  // (RAC1_WORLD_SHADOW=share, testing / no key light known: the old estimate, the strength's share of the colour)
+            static const bool share = std::getenv("RAC1_WORLD_SHADOW") != nullptr && std::strcmp(std::getenv("RAC1_WORLD_SHADOW"), "share") == 0;
+            const glm::vec4& k = g_sh.key;
+            if (share || !(k.x + k.y + k.z > 0.0f)) glUniform4f(l.key, 0.0f, 0.0f, 0.0f, -1.0f);
+            else glUniform4f(l.key, k.x * (128.0f / 255.0f), k.y * (128.0f / 255.0f), k.z * (128.0f / 255.0f), k.w);
+        }
     }
     glUniform1i(l.debug, g_shadow_debug);
     glUniform1i(l.pt_n, g_modern_points != 0 ? g_sh.npts : -1);

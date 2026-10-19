@@ -208,7 +208,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_SHADOW_SHOW_CASTERS` | any value = on; default off | Draws the shadow casters' set in the normal view instead of the shadow maps, to see what casts shadows. |
 | `RAC1_SHADOW_SKIP` | 1 or 2; default 0 (off) | Testing switch for the modern shadow pass: 1 leaves the world out of the shadow maps, 2 leaves the mobys out, so the other contributes alone. |
 | `RAC1_SHADOW_SPLITS` | three comma-separated increasing positive floats "a,b,c"; unset = built-in cascade splits | Overrides the distances at which the modern shadow cascades split. Ignored if the three numbers are not valid and increasing. |
-| `RAC1_SHADOW_STRENGTH` | integer 0-100; default 55 | Darkness of the modern shadows (initial value of the shadow strength setting). |
+| `RAC1_SHADOW_STRENGTH` | integer 0-100; default 55 | Darkness of the modern shadows on the world where the key light's colour is not known (`RAC1_SUN_DIR`, or `RAC1_WORLD_SHADOW=share`): the percent of the colour a full shadow removes. Elsewhere a shadow removes the key light's own term. |
 | `RAC1_SHADOW_TFRAG_HIGH` | any value = on; default off | Debug print for the shadow pass listing terrain (tfrag) entries lying high above the camera along the sun direction. |
 | `RAC1_SHADOW_TFRAG_KEEP` | any value = on; default off | Testing: in the shadow maps keep the terrain entries the frame already drew (at their view LOD) and add the rest, instead of rebuilding every entry at its own distance LOD. |
 | `RAC1_SHADOW_TFRAG_TRACE` | any value = on; default off | Prints, each frame, how many terrain (tfrag) packets were decided to cast shadows and how many were emitted. |
@@ -221,10 +221,12 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_STALL_LOG` | milliseconds as a number; default off (-1) | Logs every game step (a game frame or a blocking loop's frame) that takes longer than the given number of milliseconds, with the vsyncs it spanned. |
 | `RAC1_SUB_TRACE` | any value = on; default off | Prints, for each substituted draw range, how many substitute and real primitives the GS emulation kept or dropped. |
 | `RAC1_SUN_COVER` | 0 = off; default on | The modern lighting's check of how much of the view sees the sun (the sun's shadows fade out in a view covered from it, such as a room). 0 keeps the zone's sun everywhere, to compare. See [Lighting](lighting.md). |
-| `RAC1_SUN_COVER_TRACE` | set (any value) = on; default off | Every 60 frames prints how much of the view sees the sun, the sky's share and the sun's weight scale that follows from it. |
+| `RAC1_SUN_COVER_SKY` | 0 = off; default on | The modern lighting's memory of the places where the sky was in view (outdoors: the sun is kept there whatever the view shows). 0 leaves the view's measure alone, as in 0.4.0, to compare. See [Lighting](lighting.md). |
+| `RAC1_SUN_COVER_TRACE` | set (any value) = on; default off | Every 60 frames prints how much of the view sees the sun, the sky's share, whether the camera is outdoors (near a place the sky was seen from) and the sun's weight scale that follows from them. |
 | `RAC1_SUN_DIR` | three comma-separated floats "x,y,z"; unset = the level's own sun direction | Overrides the direction of the sun used by the modern lighting and shadows (normalised; ignored if near zero length). |
 | `RAC1_SUN_LEVEL` | set (any value) = on; default off | The modern lighting's sun always uses the level's light set 0 (the old way) instead of the light set the hero is lit with. See [Lighting](lighting.md). |
 | `RAC1_SUN_TRACE` | set (any value) = on; default off | Prints the light sets the hero is lit with, for the modern lighting's sun. See [Lighting](lighting.md). |
+| `RAC1_TFRAG_LIGHT_TRACE` | <every>[,x,y,z,r]; default off | Every <every> drawn frames with the modern lighting on, takes the terrain's (tfrag) lit vertex colours within r units (default 12) of the hero, or of x,y,z, apart as the game's relighting makes them: base colour, the light set's two directional terms, against the colour in EE memory; prints the means, the light sets used and the sun. See [Lighting](lighting.md). |
 | `RAC1_TF_HITS` | integer; default 2 | Testing threshold for the terrain shadow build: a candidate with fewer than this many hits is discarded. |
 | `RAC1_TITLE_TRACE` | any value = on; default off | Prints the title scene's state (frame, block, mobys, lists) about once every 100 frames while the title screen runs. |
 | `RAC1_VIEW_ANGLE` | angle in radians as a float; default 0 | With RAC1_VIEW_HERO_FRONT, the angle around the hero (from straight in front) at which the debug camera sits. |
@@ -263,6 +265,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_WORLD_MRP_DEBUG` | any value = on; default off | Prints extra diagnostics from the modern world renderer (per-draw and texture information). |
 | `RAC1_WORLD_MRP_DIFF` | any value = on; default off | Renders the world both with the modern renderer and the faithful GS path and computes their pixel difference, disabling the GPU fast paths. |
 | `RAC1_WORLD_MRP_DIFF_SHOTS` | comma-separated list of frame numbers; default none | With RAC1_WORLD_MRP_DIFF, saves the two images and their difference as pictures at the listed frames. |
+| `RAC1_WORLD_SHADOW` | share; unset = off | With the modern lighting, a sun shadow on the world removes a fixed share of the colour (`RAC1_SHADOW_STRENGTH`, scaled by how much the surface faces the sun) as in 0.4.0, instead of the key light's own term. To compare. See [Lighting](lighting.md). |
 
 ## Automated testing variables
 

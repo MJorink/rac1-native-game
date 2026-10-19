@@ -1755,8 +1755,10 @@ void draw_batches(int win_w, int win_h, const gs::Viewport* vp, bool shadows = f
     const int mm = g_mrp_moby_mip != 0 ? 1 : 0;
     Key cur;
     bool have = false;
-    // (the drop shadows only in the world's projection and depth space; not with the modern lighting: the mobys cast their own)
-    bool shadows_done = !shadows || F.mode != 0 || (mrp_lighting_active() && mrp_lighting_has_sun());  // (no sun, the game's)
+    // (the drop shadows only in the world's projection and depth space; never with the modern lighting on - Daino's choice,
+    // 2026-10-19 -, even where it has no sun's shadows (a zone without a sun, a view covered from it, the frames it does not
+    // light): the mobys cast their own where there is a sun. The game still makes them: the frame's capture only goes undrawn)
+    bool shadows_done = !shadows || F.mode != 0 || g_modern_shadows != 0;
     // the drop shadows come between the draw loop's first chain and its deferred mobys (0x24fc38 chains them there): the mobys
     // of the first chain are in the depth buffer the shadows' faces test against, the deferred ones are drawn over the darkening
     auto draw_shadows = [&] {

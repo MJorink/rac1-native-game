@@ -2,7 +2,7 @@
 // real shadows of the sun cast by the world (tfrag, tie, shrub: the foliage with its alpha cut-outs) and the mobys onto the world and
 // the mobys, by cascaded shadow maps. Host code: none of it is the game's, and none of it changes the game's state (it only reads
 // the frame the MRP draws). Off by default (the original's lighting, the reference); on, the original's drop shadows (mrp_shadows.h)
-// are not drawn: the mobys cast their own.
+// are never drawn (the game still makes them): the mobys cast their own where there is a sun.
 //
 // How it plugs into the MRP (ADR 0010, "lighting / shadow modules"):
 //  - every MRP vertex shader (world CPU / tfrag path, world GPU path, mobys) ends its world-projection branch with `sh_clip(clip)`:
@@ -110,8 +110,6 @@ float mrp_lighting_caster_grow();
 // orig: (host) whether the next frame's casters outside the view are wanted (read on the scene's worker): a cached cascade
 // near its box's edge or drawn without them, or the cache off; the game's point lights' shadows want them besides (their slots)
 bool mrp_lighting_casters_wanted();
-// orig: (host) whether the level has a sun (its key light from above): else no sun's shadows, the game's drop shadows kept
-bool mrp_lighting_has_sun();
 // orig: (host) whether this frame's casters outside the view were made (mrp_world_renderer.cpp)
 bool mrp_world_casters_built();
 
@@ -126,6 +124,7 @@ struct ShadowLocs {
     int part = -1;                           // (the cascades' squares' share of their layer)
     int depth = -1, range = -1, fade = -1;   // (the maps' depths, the cascades' ranges, the far casters' fade)
     int sun_k = -1;                          // (the sun's shadows' weight)
+    int key = -1;                            // (the key light's colour and back factor: the world's shadows)
 };
 // orig: (host) the locations of a linked program
 ShadowLocs mrp_lighting_locs(unsigned prog);
@@ -187,6 +186,7 @@ bool mrp_moby_caster_rect(const float* light_vp, float rect[4], const float* wit
     "uniform vec3 uShRange;\n"           /* the cascades' depth ranges, units */                         \
     "uniform vec4 uShFade;\n"            /* far casters: from, to (units), the shadow kept, on */        \
     "uniform float uShSunK;\n"           /* the sun's shadows' weight (the zone's light; faded) */      \
+    "uniform vec4 uShKey;\n"             /* the key light's colour (x 128 / 255) and back factor; w < 0: none */ \
     "#endif\n"                                                                                          \
     "uniform int uShDebug;\n"                                                                           \
     "uniform int uPtN;\n"                                                                               \
@@ -319,6 +319,13 @@ bool mrp_moby_caster_rect(const float* light_vp, float rect[4], const float* wit
     "    if (uShDebug == 2) return vec3(sh_state.x * max(sh_state.y, 0.15));\n"                         \
     "    float k = 1.0 - uShParam.x * (1.0 - sh_state.x) * sh_state.y;\n"                               \
     "    vec3 o = c * k;\n"                                                                             \
+    "#ifdef SH_POINTS\n" /* the world: the key light's own term taken off, as the game adds it (base + colour max(n.l, k n.l)) */ \
+    "    if (uShKey.w >= 0.0) {\n"                                                                     \
+    "        float ndl = dot(sh_n, uShSun);\n"                                                         \
+    "        vec3 key = uShKey.rgb * max(ndl, uShKey.w * ndl);\n"                                       \
+    "        o = max(c - max(key, vec3(0.0)) * (1.0 - sh_state.x), vec3(0.0));\n"                       \
+    "    }\n"                                                                                          \
+    "#endif\n"                                                                                         \
     "    if (uShDebug == 1) {\n"                                                                        \
     "        int ci = int(sh_state.z);\n"                                                               \
     "        vec3 tint = ci == 0 ? vec3(1.0, 0.6, 0.6) : ci == 1 ? vec3(0.6, 1.0, 0.6) : ci == 2 ? vec3(0.6, 0.6, 1.0) : vec3(1.0);\n" \

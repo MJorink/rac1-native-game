@@ -20,8 +20,16 @@ differs a lot between planets. Where each part comes from is described in
   hero's light sets, turned and faded as he moves from one zone to the next. It is not a fixed
   per-level direction. Where the zone's light does not come from above, there is no sun and no sun
   shadows there. Where it does but a roof stops it (a room, a corridor, a ship's hold), so that
-  almost nothing in view sees the sun, its shadows fade out and the picture is the original's
-  ([Views covered from the sun](#views-covered-from-the-sun)).
+  almost nothing in view sees the sun and no sky has been seen from there, its shadows fade out and
+  the picture is the original's lighting ([Views covered from the sun](#views-covered-from-the-sun)).
+- **A shadow takes off the sun's own light.** The terrain and the objects of the world are lit by
+  the game as a base colour plus the zone's lights; a sun shadow removes the key light's term, as the
+  mobys' shadows do, so the ground, the walls and Ratchet in the same shadow agree
+  ([How a shadow darkens](#how-a-shadow-darkens)).
+- **No drop shadows.** With the lighting on, the original's drop shadows under Ratchet and the
+  mobys are never drawn, even where there is no sun (Daino's choice, 2026-10-19). The game still
+  computes them; only the drawing is left out. Where there is no sun shadow nothing replaces them;
+  with Ambient Occlusion on, the occlusion darkens where the feet meet the ground.
 - **The objects that glow** (lamps, screens, strips) are bright textures in the game, not lights.
   When a level loads they are found automatically and turned into small point lights. This is
   our own heuristic, not game data, and it can be wrong (see the table below).
@@ -197,8 +205,8 @@ where he stands**.
    (+0x3a / 256). If only one has, its weight is scaled by its share of the blend.
 4. **Transitions.** When the zone changes, the direction turns at most **1 degree a frame** and the
    weight changes at most **1/30 a frame**. In a zone without a sun the shadows fade out in about
-   half a second instead of vanishing. At weight 0 the cascades are not drawn, and the characters
-   get the original game's drop shadows back.
+   half a second instead of vanishing. At weight 0 the cascades are not drawn. The original's drop
+   shadows do not come back (they are never drawn with the lighting on).
 5. **The view covered** (our choice): the weight is then scaled by how much of the view sees the
    sun, see [Views covered from the sun](#views-covered-from-the-sun).
 6. **Overrides for testing:** `RAC1_SUN_DIR=x,y,z` forces a sun, `RAC1_SUN_LEVEL=1` always uses
@@ -247,15 +255,23 @@ Blarg's station. The sun's shadows show nothing there, so they fade out:
    counted (the receivers do not shadow it either); the sky counts as seeing the sun.
 2. The result is read back the next frame (a pixel buffer, always the last frame's, so a run gives
    the same picture every time).
-3. The sun's weight is scaled by the share of the view that sees the sun: 0 under 5 %, 1 over
-   25 %. The scale follows the share slowly (3 % of the way a frame, about a second), and the weight
-   then fades as between zones. At 0 the picture is the original's, with the original's drop
-   shadows, the point lights and the occlusion on top.
-4. The cascades are still drawn while the zone has a sun, for the next frame's test.
+3. **Outdoors is remembered.** Whenever at least 5 % of the samples are sky, the camera's position
+   is noted (one place every 4 units, up to 1024 per level). Within 12 units of such a place the
+   sun is kept whatever the view shows; beyond 24 units only the view's measure counts. A room
+   shows no sky.
+4. The sun's weight is scaled by the larger of the two: the share of the view that sees the sun
+   (0 under 5 %, 1 over 25 %) and being outdoors. The scale follows slowly (3 % of the way a
+   frame, about a second), and the weight then fades as between zones. At 0 the picture is the
+   original's lighting, with the point lights and the occlusion on top (no drop shadows).
+5. The cascades are still drawn while the zone has a sun, for the next frame's test.
 
-It also fades the sun where a large shadow fills the whole view outdoors (Ratchet under Novalis's
-big mushroom trees looking at the shaded ground): the shadow comes back as soon as some lit
-ground or the sky is in view, a little like an eye adjusting.
+In 0.4.0 the view alone decided, so the sun also faded outdoors whenever a shadow filled the
+view: Novalis's start valley lies in the shade of its big mushroom trees and of the plateau beside
+it (the first surface the sun meets is 10 to 30 units above the ground almost everywhere within
+50 units of the start), so looking down at the ground faded every shadow out, Ratchet's included,
+and they came back as soon as the camera saw the sky or the lit city. Patches of ground went from
+shaded to lit with the camera. The memory of the sky keeps them steady outdoors
+(`RAC1_SUN_COVER_SKY=0` gives the old behaviour).
 
 ### The sun's shadows
 
@@ -270,9 +286,10 @@ ground or the sky is in view, a little like an eye adjusting.
 - **Static cache.** Each cascade's static world is drawn once into a map covering 1.25 times its
   slice, and redrawn only when the slice leaves that box. Each frame the map is copied and the mobys
   are drawn on top, copying back only the rectangle where mobys were.
-- **Receiving.** A 3 x 3 PCF filter with a normal-offset bias. A shadow darkens the world by 55 %
-  (`RAC1_SHADOW_STRENGTH`). For mobys the shadowed colour is the one the game would give **without**
-  the key light (shader variant `SH_SPLIT`).
+- **Receiving.** A 3 x 3 PCF filter with a normal-offset bias. The shadowed colour is the one the
+  game would give **without** the key light: for mobys from their light record (shader variant
+  `SH_SPLIT`), for the world by taking the key light's term off its colour
+  ([How a shadow darkens](#how-a-shadow-darkens)).
 - **Far shadows are lighter.** For a pixel in shadow the shader finds the depth of the blockers.
   Within 25 units along the ray the shadow is full; then it lightens to 35 % at 120 units and
   beyond (`RAC1_SHADOW_FADE=0` turns it off).
@@ -375,7 +392,7 @@ game's lights first, then emitters that have a moby within reach); a 32 x 18 til
 - **The game's state never changes.** The modern lighting reads the game's memory and does not
   write it. The one exception is the debug light editor's "Ratchet to it" (see below).
 - **Test switches:** sun: `RAC1_SHADOWS`, `RAC1_SHADOW_RES`, `RAC1_SUN_DIR`, `RAC1_SUN_LEVEL`,
-  `RAC1_SUN_TRACE`; lights: `RAC1_POINTS`, `RAC1_POINT_SHADOWS`, `RAC1_AUTO_LIGHTS`,
+  `RAC1_SUN_TRACE`, `RAC1_SUN_COVER`, `RAC1_SUN_COVER_SKY`, `RAC1_WORLD_SHADOW`, `RAC1_TFRAG_LIGHT_TRACE`; lights: `RAC1_POINTS`, `RAC1_POINT_SHADOWS`, `RAC1_AUTO_LIGHTS`,
   `RAC1_LIGHTS_TRACE`, `RAC1_LIGHTS_DIR`; shadows: `RAC1_SHADOW_CACHE`, `RAC1_SHADOW_FADE`,
   `RAC1_SHADOW_MOBY_DIST`; occlusion: `RAC1_AO`. The Graphics menu sets the same values; an
   environment variable, when present, wins.
@@ -418,17 +435,51 @@ applies a normal-offset bias (1.5 texels along the normal, 1 along the sun), fin
 that contains it, and blends into the next over a narrow band at the edge. Filtering is 3x3 PCF with
 hardware depth comparison and bilinear taps.
 
-How a shadow darkens differs between the world and the mobys:
+### How a shadow darkens
 
-- **The world's** colours are baked vertex colours, which do not say how much of them came from the
-  sun. The shadow removes a share of the light: `colour * (1 - 0.55 * (1 - visibility) * facing)`,
-  where `facing` fades the shadow on surfaces turned away from the sun. The 55 % is an estimate.
+The world's colours (terrain, ties, shrubs) are the game's own relighting (`world_tfrag_lighting`
+and its siblings, see [The original game's lighting](#the-original-games-lighting)): per vertex
+
+```
+colour = base + 128 * colour1 * max(n . l1, k1 n . l1) + 128 * colour2 * max(n . l2, k2 n . l2)   (bytes, at most 255)
+```
+
+with `base` the level's per-vertex colour (painted by the artists, with its own light and dark
+patches), and light 1 of set 0 the key light the sun is taken from. Taking the terrain near the hero
+apart this way (`RAC1_TFRAG_LIGHT_TRACE`; recomposed within 1 of 255 of the colour in EE memory) gives,
+at the start of each level:
+
+| Level | lit = base + key light + second light (means, 0..255) | the vertices' light sets |
+|---|---|---|
+| Novalis | 93 = 48 + 45 + 2 | set 0 for 408 of 440, sets 1 and 2 for the rest |
+| Aridia | 64 = 39 + 26 + 0 | set 0 |
+| Kerwan | 72 = 37 + 31 + 5 | set 0 |
+| Orxon | 54 = 40 + 14 + 0 | set 0 for 642 of 712 |
+| Pokitaru | 108 = 63 + 46 + 0 | set 0 |
+| Oltanis | 48 = 34 + 14 + 0 | set 0 |
+
+So the terrain is lit by the same key light, from the same direction, as the sun the shadows are cast
+from; what the shadows disagreed with was how much they took off:
+
+- **The world** (`sh_apply`, the `SH_POINTS` variant): a shadow removes the key light's term,
+  `colour - (1 - visibility) * 128 / 255 * colour1 * max(n . sun, k1 n . sun)`, with `n` the face
+  normal. A surface the key light does not reach (turned away from the sun) keeps its colour, as it
+  receives no shadow: it was not lit by the sun in the game either. In 0.4.0 a shadow removed 55 % of
+  the whole colour, base included, scaled down on surfaces at a grazing angle and nothing on those
+  turned away: inside a shadow, ferns, slopes and grass turned slightly away from the sun stayed at
+  their full colour and looked lit beside the darkened ground, and Ratchet cast no shadow on them
+  (Novalis's start valley, Kerwan's first bridge). `RAC1_WORLD_SHADOW=share` gives the old way.
 - **Mobys** are lit per vertex from their light record, so the `SH_SPLIT` vertex shader also computes
   the colour without the key light. The fragment shader mixes the two by the shadow's visibility,
   which is exactly the original's formula with the sun blocked.
 
-The sky is never shadowed. With modern lighting on, the original drop shadows are not drawn: the real
-shadows replace them.
+The key light's colour follows the zone (half a second between zones). Where it is not known
+(`RAC1_SUN_DIR`) the world falls back to the share (`RAC1_SHADOW_STRENGTH`). Remaining differences
+from the exact formula: the face normal stands for the game's per-vertex normal, a colour the game
+clamped at 255 loses a little more than it should, and a vertex lit by another light set than set 0
+(a few on Novalis and Orxon) is shaded with set 0's key light.
+
+The sky is never shadowed. With modern lighting on, the original drop shadows are not drawn.
 
 ### The static shadow cache
 
@@ -580,8 +631,8 @@ Finding the automatic emitters costs 10 to 50 ms once per level (the survey of e
   shadows only within 60 units of the camera.
 - Mobys get no per-pixel point lights and are not lit by emitters or hand-placed lights.
 - Emitters' cube shadows are cast by mobys only.
-- The world's sun shading is an estimate (55 % of the light removed, scaled by facing); the mobys'
-  is exact.
+- The world's sun shading takes off the key light's term with the face normal (the game uses the
+  vertex normal); the mobys' is exact.
 - Normals are flat face normals, so per-pixel point lighting is faceted on coarse geometry.
 - A moby never drawn does not cast; an off-screen moby casts its last drawn pose.
 - Shadow Distance has no fade at its limit.
@@ -590,9 +641,11 @@ Finding the automatic emitters costs 10 to 50 ms once per level (the survey of e
 - The intensity value of the game's point lights is not used per pixel; only their colour and radius.
 - Lighting is not applied on the title screen, in menus or during fades.
 - A zone whose key light comes from below or the horizon has no sun shadows. A closed zone lit
-  through geometry gets the original's look only when almost nothing in view sees the sun; a
-  courtyard or a street shaded by tall walls sits in between, and its shadows come and go as the
-  camera turns (Oltanis, Quartu).
+  through geometry gets the original's look only when almost nothing in view sees the sun and no
+  sky was seen from near the camera's place; a room with windows on the sky (Blarg's lounges) keeps
+  its shadows. Entering a room from outdoors, the sun fades out only 12 to 24 units in.
+- No shadow replaces the original's drop shadows where there is no sun shadow (rooms, zones without
+  a sun); the ambient occlusion, when on, is the only contact darkening there.
 - The covered views' test looks at the last frame (one frame late) and at the cascades' reach
   (220 units): beyond them, everything counts as seeing the sun.
 - The automatic lights are a heuristic: some lamps are missed (thin strips, lamps that are mobys:
