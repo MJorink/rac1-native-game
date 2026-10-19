@@ -1088,7 +1088,8 @@ def update_zip(channel, over_git=False):
     src_root = subdirs[0] if len(subdirs) == 1 else unpack_dir
 
     # Back up the source files about to be replaced or removed
-    new_files = list(zip_source_files(src_root).keys())
+    new_hashes = zip_source_files(src_root)
+    new_files = list(new_hashes.keys())
     new_set = set(new_files)
     # (removed: what the previous archive brought and this one no longer has; only inside the archive's folders, as
     # the records made by 0.3.0's updater also list the player's own files in the top folder)
@@ -1128,10 +1129,16 @@ def update_zip(channel, over_git=False):
     try:
         for rel in removed:
             (ROOT / rel).unlink(missing_ok=True)
+        copied = 0
         for rel in new_files:
             dst = ROOT / rel
+            # (a file the new version does not change is left as it is, with its time: the build then recompiles
+            # only what changed, not everything the archive brought)
+            if rel in old_set and file_sha256(dst) == new_hashes[rel]:
+                continue
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_root / rel, dst)
+            copied += 1
         UPDATE_VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
         UPDATE_VERSION_FILE.write_text("\n".join(ver_lines) + "\n", encoding="ascii")
     except OSError as e:
@@ -1144,7 +1151,7 @@ def update_zip(channel, over_git=False):
     if over_git:
         state["zip_over_git"] = True
     save_state(state)
-    ok(f"Unpacked {label}.")
+    ok(f"Unpacked {label} ({copied} of its {len(new_files)} files changed, {len(removed)} removed).")
     return restore
 
 
@@ -1169,6 +1176,20 @@ def run_update(args):
     if GEN_SRC.is_dir():
         shutil.copytree(GEN_SRC, gen_bak)
 
+    try:
+        restore_sources = fetch_update(channel)
+    except SystemExit:
+        # (stopped before anything changed: no network, local changes...; the backups, a copy of the program among
+        # them, are not left behind)
+        exe_bak.unlink(missing_ok=True)
+        state_bak.unlink(missing_ok=True)
+        shutil.rmtree(gen_bak, ignore_errors=True)
+        raise
+    finish_update(args, restore_sources, exe_bak, state_bak, gen_bak, had_state)
+
+
+def fetch_update(channel):
+    """The new sources, with git or the source zip; returns the callback that puts the previous ones back (or None)."""
     restore_sources = None
     if not (ROOT / ".git").exists():
         restore_sources = update_zip(channel)
@@ -1195,7 +1216,11 @@ def run_update(args):
                   "(To update with git again later: install Git, then\n"
                   "      `git fetch` and `git reset --hard origin/main`, or the release's tag.)", flush=True)
             restore_sources = update_zip(channel, over_git=True)
+    return restore_sources
 
+
+def finish_update(args, restore_sources, exe_bak, state_bak, gen_bak, had_state):
+    """The updated setup, in a child process; on failure, the previous sources, program and generated code back."""
     step(2, 2, "Rebuilding and updating the game's data")
     child_cmd = [sys.executable, str(ROOT / "tools/setup.py"), "--no-play"]
     if args.iso:
