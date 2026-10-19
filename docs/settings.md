@@ -41,6 +41,7 @@ and behave like the game's own pages. Left and right change a row's value; Cross
 | Level of Detail | Original, Low, Medium, High, Maximum | Original |
 | Lighting | Original, Low, Medium, High | Original |
 | Shadow Strength | 50, 60, 70, 80, 90, 100 (%) | 70 |
+| Sun Rays | Off, Low, High | Off |
 | Shadow Distance | Low, Medium, High, Maximum | Maximum |
 | Dynamic Shadows | Off, On | Off |
 | Secondary Lights | Off, Game's, All | All |
