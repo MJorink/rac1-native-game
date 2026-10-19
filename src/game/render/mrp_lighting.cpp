@@ -45,6 +45,7 @@ int g_auto_lights = env_int("RAC1_AUTO_LIGHTS", 1);
 int g_shadow_cache = env_int("RAC1_SHADOW_CACHE", 1);
 int g_user_light_selected = -1;
 int g_ao = env_int("RAC1_AO", 0);
+int g_sun_rays = env_int("RAC1_SUN_RAYS", 0);
 float g_shadow_moby_dist = std::getenv("RAC1_SHADOW_MOBY_DIST") != nullptr ? static_cast<float>(std::atof(std::getenv("RAC1_SHADOW_MOBY_DIST"))) : 0.0f;
 
 namespace {
@@ -1063,6 +1064,193 @@ struct Ao {
     GLint u_bs_depth = -1, u_bs_ao = -1, u_bs_texel = -1;
 } g_ao_s;
 
+// ---- the sun's rays (Options > Graphics > Sun Rays) ------------------------------------------------------------------------
+//
+// Our choice, not the game's: light shafts from the sun where the sky shows through the scene (a tunnel's mouth, the gaps between
+// trees). A quarter of the resolution, screen space: (1) the sky's texels (depth 1) near the sun's place on the screen, their colour tinted by
+// the key light, the rest black; (2) a radial blur of that toward the sun (40 taps, each further one weaker); (3) added to the
+// picture (Low / High: a little / more), faded when the sun leaves the screen or is behind the camera, and with the sun's weight
+// (no rays where the zone has no sun, in the level's interiors, in a zone fading), at most +0.28 / +0.45 a texel (a soft limit: a
+// wide sky in front of the sun does not burn the picture white). Before the effects, the particles and the 2D.
+const char* kRaysMaskFs = R"(#version 460 core
+in vec2 vUv;
+uniform sampler2D uDepth, uColor;
+uniform vec2 uSun;      // the sun's place, 0..1 of the view
+uniform vec2 uAspect;   // (the view's width / height, 1: distances in the screen's proportions)
+uniform vec3 uTint;     // the key light's colour, its largest channel 1
+out vec4 FragColor;
+void main() {
+    float d = texture(uDepth, vUv).r;
+    if (d < 1.0) { FragColor = vec4(0.0); return; }
+    vec3 c = texture(uColor, vUv).rgb;
+    vec2 v = (vUv - uSun) * uAspect;
+    float k = exp(-dot(v, v) * 6.0);  // (the sky near the sun)
+    float lum = dot(c, vec3(0.299, 0.587, 0.114));
+    FragColor = vec4(mix(c, uTint * lum, 0.5) * k, 1.0);
+}
+)";
+const char* kRaysBlurFs = R"(#version 460 core
+in vec2 vUv;
+uniform sampler2D uMask;
+uniform vec2 uSun;
+uniform vec4 uParam;  // x density (how far toward the sun the taps reach), y decay, z weight, w exposure
+out vec4 FragColor;
+void main() {
+    const int N = 40;
+    vec2 delta = (vUv - uSun) * (uParam.x / float(N));
+    float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    vec2 uv = vUv - delta * noise;  // (dithered start: no rings)
+    vec3 sum = vec3(0.0);
+    float decay = 1.0;
+    for (int i = 0; i < N; ++i) {
+        uv -= delta;
+        sum += texture(uMask, uv).rgb * decay * uParam.z;
+        decay *= uParam.y;
+    }
+    FragColor = vec4(sum * uParam.w, 1.0);
+}
+)";
+const char* kRaysAddFs = R"(#version 460 core
+in vec2 vUv;
+uniform sampler2D uRays;
+uniform float uK, uCap;  // (the gain, and the most a texel gets: a wide sky in front of the sun does not burn the picture white)
+out vec4 FragColor;
+void main() { FragColor = vec4(uCap * (1.0 - exp(-texture(uRays, vUv).rgb * uK / uCap)), 0.0); }
+)";
+struct Rays {
+    GLuint mask = 0, blur = 0, add = 0, vao = 0;
+    GLuint dfbo = 0, dtex = 0, cfbo = 0, ctex = 0, mfbo = 0, mtex = 0, rfbo = 0, rtex = 0;
+    int w = 0, h = 0;
+    GLenum dfmt = 0;
+    GLint last_fb = -1;
+} g_rays;
+// orig: (host) the depth format of a framebuffer (a blit of its depth wants the same)
+GLenum depth_format(GLint fb) {
+    GLint dbits = 24, sbits = 8, dtype = GL_UNSIGNED_NORMALIZED;
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(fb));
+    const GLenum datt = fb == 0 ? GL_DEPTH : GL_DEPTH_ATTACHMENT, satt = fb == 0 ? GL_STENCIL : GL_STENCIL_ATTACHMENT;
+    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, datt, GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &dbits);
+    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, datt, GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &dtype);
+    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, satt, GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, &sbits);
+    while (glGetError() != GL_NO_ERROR) {}
+    return dtype == GL_FLOAT ? (sbits > 0 ? GL_DEPTH32F_STENCIL8 : GL_DEPTH_COMPONENT32F)
+                             : (sbits > 0 ? GL_DEPTH24_STENCIL8 : (dbits >= 32 ? GL_DEPTH_COMPONENT32 : dbits >= 24 ? GL_DEPTH_COMPONENT24 : GL_DEPTH_COMPONENT16));
+}
+// orig: (host) the sun's rays added to the bound framebuffer's 3D (see kRaysMaskFs); the caller saves and restores the GL state
+void sun_rays_pass(GLint fb, const int vp[4]) {
+    if (g_sun_rays <= 0 || !(g_sh.sun_k > 0.01f)) return;
+    float vpf[16];
+    mrp_world_view_proj(vpf);
+    const glm::mat4 VP = glm::make_mat4(vpf);
+    const glm::vec4 c = VP * glm::vec4(g_sh.cam + g_sh.sun * 2000.0f, 1.0f);
+    if (!(c.w > 0.0f)) return;  // (behind the camera)
+    const glm::vec2 su = glm::vec2(c.x, c.y) / c.w * 0.5f + 0.5f;
+    // (on screen: full; fading out to 0.6 of the view beyond its edge)
+    const float out = std::max({-su.x, su.x - 1.0f, -su.y, su.y - 1.0f, 0.0f});
+    const float fade = std::clamp(1.0f - out / 0.6f, 0.0f, 1.0f);
+    if (!(fade > 0.0f)) return;
+    Rays& R = g_rays;
+    const int w = vp[2], h = vp[3], hw = std::max(1, w / 4), hh = std::max(1, h / 4);  // (a quarter: the shafts are soft)
+    if (R.mask == 0) {
+        R.mask = ao_link(kRaysMaskFs);
+        R.blur = ao_link(kRaysBlurFs);
+        R.add = ao_link(kRaysAddFs);
+        glGenVertexArrays(1, &R.vao);
+        GLuint f[4], t[4];
+        glGenFramebuffers(4, f);
+        glGenTextures(4, t);
+        R.dfbo = f[0], R.cfbo = f[1], R.mfbo = f[2], R.rfbo = f[3];
+        R.dtex = t[0], R.ctex = t[1], R.mtex = t[2], R.rtex = t[3];
+    }
+    GLenum fmt = R.dfmt;
+    if (fb != R.last_fb || fmt == 0) {
+        fmt = depth_format(fb);
+        R.last_fb = fb;
+    }
+    const bool st = fmt == GL_DEPTH24_STENCIL8 || fmt == GL_DEPTH32F_STENCIL8;
+    if (R.w != w || R.h != h || R.dfmt != fmt) {
+        R.w = w;
+        R.h = h;
+        R.dfmt = fmt;
+        auto tex = [](GLuint t, GLint ifmt, int tw, int th, GLenum f2, GLenum ty, GLint filter) {
+            glBindTexture(GL_TEXTURE_2D, t);
+            glTexImage2D(GL_TEXTURE_2D, 0, ifmt, tw, th, 0, f2, ty, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        };
+        tex(R.dtex, static_cast<GLint>(fmt), hw, hh, st ? GL_DEPTH_STENCIL : GL_DEPTH_COMPONENT,
+            fmt == GL_DEPTH24_STENCIL8 ? GL_UNSIGNED_INT_24_8 : fmt == GL_DEPTH32F_STENCIL8 ? GL_FLOAT_32_UNSIGNED_INT_24_8_REV : GL_FLOAT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, R.dfbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, st ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, R.dtex, 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+        tex(R.ctex, GL_RGBA8, hw, hh, GL_RGBA, GL_UNSIGNED_BYTE, GL_LINEAR);
+        glBindFramebuffer(GL_FRAMEBUFFER, R.cfbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, R.ctex, 0);
+        tex(R.mtex, GL_RGBA16F, hw, hh, GL_RGBA, GL_FLOAT, GL_LINEAR);
+        glBindFramebuffer(GL_FRAMEBUFFER, R.mfbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, R.mtex, 0);
+        tex(R.rtex, GL_RGBA16F, hw, hh, GL_RGBA, GL_FLOAT, GL_LINEAR);
+        glBindFramebuffer(GL_FRAMEBUFFER, R.rfbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, R.rtex, 0);
+    }
+    // the 3D's depth (nearest) and colour (linear) at half size
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(fb));
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.dfbo);
+    glBlitFramebuffer(vp[0], vp[1], vp[0] + w, vp[1] + h, 0, 0, hw, hh, GL_DEPTH_BUFFER_BIT | (st ? GL_STENCIL_BUFFER_BIT : 0), GL_NEAREST);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.cfbo);
+    glBlitFramebuffer(vp[0], vp[1], vp[0] + w, vp[1] + h, 0, 0, hw, hh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glDisable(GL_BLEND);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBindVertexArray(R.vao);
+    glViewport(0, 0, hw, hh);
+    const float tmax = std::max({g_sh.key.x, g_sh.key.y, g_sh.key.z, 1e-3f});
+    const glm::vec3 tint = g_sh.key.x + g_sh.key.y + g_sh.key.z > 0.0f ? glm::vec3(g_sh.key) / tmax : glm::vec3(1.0f, 0.95f, 0.85f);
+    // (1) the mask
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.mfbo);
+    glUseProgram(R.mask);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, R.dtex);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, R.ctex);
+    glUniform1i(glGetUniformLocation(R.mask, "uDepth"), 0);
+    glUniform1i(glGetUniformLocation(R.mask, "uColor"), 1);
+    glUniform2f(glGetUniformLocation(R.mask, "uSun"), su.x, su.y);
+    glUniform2f(glGetUniformLocation(R.mask, "uAspect"), static_cast<float>(w) / static_cast<float>(std::max(h, 1)), 1.0f);
+    glUniform3f(glGetUniformLocation(R.mask, "uTint"), tint.x, tint.y, tint.z);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    // (2) the radial blur
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.rfbo);
+    glUseProgram(R.blur);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, R.mtex);
+    glUniform1i(glGetUniformLocation(R.blur, "uMask"), 0);
+    glUniform2f(glGetUniformLocation(R.blur, "uSun"), su.x, su.y);
+    glUniform4f(glGetUniformLocation(R.blur, "uParam"), 0.9f, 0.945f, 1.0f / 40.0f * 4.0f, 1.0f);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    // (3) added to the picture
+    static const float gain_env = std::getenv("RAC1_SUN_RAYS_GAIN") != nullptr ? static_cast<float>(std::atof(std::getenv("RAC1_SUN_RAYS_GAIN"))) : 1.0f;  // (testing)
+    const float k = (g_sun_rays >= 2 ? 7.0f : 3.5f) * gain_env * fade * std::min(g_sh.sun_k, 1.0f);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(fb));
+    glViewport(vp[0], vp[1], w, h);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    glUseProgram(R.add);
+    glBindTexture(GL_TEXTURE_2D, R.rtex);
+    glUniform1i(glGetUniformLocation(R.add, "uRays"), 0);
+    glUniform1f(glGetUniformLocation(R.add, "uK"), k);
+    glUniform1f(glGetUniformLocation(R.add, "uCap"), (g_sun_rays >= 2 ? 0.45f : 0.28f) * std::max(fade * std::min(g_sh.sun_k, 1.0f), 1e-3f));
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glDisable(GL_BLEND);
+    if (std::getenv("RAC1_SUN_RAYS_TRACE") != nullptr) {
+        static uint64_t n = 0;
+        if (n++ % 60 == 0) std::printf("[rays] sun at %.2f %.2f of the view, fade %.2f, weight %.2f: %.2f\n", su.x, su.y, fade, g_sh.sun_k, k);
+    }
+}
+
 // ---- the view covered from the sun -----------------------------------------------------------------------------------
 //
 // Our choice, not the game's: a room, a corridor, a ship's hold is lit by its zone's key light, which comes from above, but the
@@ -1478,6 +1666,46 @@ void mrp_lighting_ao_pass() {
         glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev_tex1));
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev_tex));
+        glDepthMask(dmask);
+        glBlendFuncSeparate(static_cast<GLenum>(bsrc), static_cast<GLenum>(bdst), static_cast<GLenum>(bsrca), static_cast<GLenum>(bdsta));
+    }
+    if (g_sun_rays > 0) {  // the sun's rays (their own textures; the blending and the bindings put back)
+        GLint bsrc = 0, bdst = 0, bsrca = 0, bdsta = 0, t0 = 0, t1 = 0;
+        glGetIntegerv(GL_BLEND_SRC_RGB, &bsrc);
+        glGetIntegerv(GL_BLEND_DST_RGB, &bdst);
+        glGetIntegerv(GL_BLEND_SRC_ALPHA, &bsrca);
+        glGetIntegerv(GL_BLEND_DST_ALPHA, &bdsta);
+        GLboolean dmask = GL_TRUE;
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &dmask);
+        glDepthMask(GL_FALSE);
+        glActiveTexture(GL_TEXTURE1);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &t1);
+        glActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &t0);
+        static const bool trace = std::getenv("RAC1_SUN_RAYS_TRACE") != nullptr;  // (testing: the pass's GPU time)
+        static GLuint q = 0;
+        static double acc = 0.0;
+        static int nq = 0;
+        if (trace) {
+            if (q == 0) glGenQueries(1, &q);
+            glBeginQuery(GL_TIME_ELAPSED, q);
+        }
+        sun_rays_pass(fb, vp);
+        if (trace) {
+            glEndQuery(GL_TIME_ELAPSED);
+            GLuint64 ns = 0;
+            glGetQueryObjectui64v(q, GL_QUERY_RESULT, &ns);
+            acc += static_cast<double>(ns) * 1e-6;
+            if (++nq == 60) {
+                std::printf("[rays] GPU %.3f ms a frame (%dx%d)\n", acc / nq, vp[2], vp[3]);
+                acc = 0.0;
+                nq = 0;
+            }
+        }
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(t1));
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(t0));
         glDepthMask(dmask);
         glBlendFuncSeparate(static_cast<GLenum>(bsrc), static_cast<GLenum>(bdst), static_cast<GLenum>(bsrca), static_cast<GLenum>(bdsta));
     }

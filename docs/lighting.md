@@ -647,6 +647,27 @@ not affect the world, nor the point-light shadows. A moby's shadow appears witho
 distance.
 
 
+## Sun rays
+
+Options > Graphics > Sun Rays (Off, Low, High; Off by default), our choice, not the game's: shafts of
+light from the sun where the sky shows through the scene - a tunnel's mouth, the gaps between trees
+(Kerwan's first tunnel, with the level's sun in front, is the showcase). Screen space, at a quarter
+of the 3D's resolution (`sun_rays_pass` in `mrp_lighting.cpp`), after the mobys and the occlusion,
+before the effects, the particles and the 2D:
+
+1. The mask: the sky's texels (depth 1) near the sun's place on the screen, their colour half tinted
+   by the key light's; everything else black, so only openings toward the sky give rays.
+2. A radial blur of the mask toward the sun (40 taps, each weaker than the one before).
+3. Added to the picture with a soft limit (at most +0.28 Low, +0.45 High a texel), so a wide sky in
+   front of the sun does not burn the picture white.
+
+The rays fade out as the sun leaves the screen (gone 0.6 of the view beyond its edge) or goes behind
+the camera, and follow the sun's weight: none where the zone has no sun, in the level's
+[interiors](#interiors), with the Lighting on Original. The cascades are not used (the sky's
+openings are). Cost on the GPU about 1.5 ms at 5053 x 1371 (the copies of the colour and the depth
+included). `RAC1_SUN_RAYS` (0 / 1 / 2) overrides the option, `RAC1_SUN_RAYS_TRACE` prints the
+sun's place, the gain and the GPU time.
+
 ## Ambient occlusion
 
 Options > Graphics > Ambient Occlusion (`mrp_lighting_ao_pass`) is a screen-space ambient occlusion
@@ -720,6 +741,7 @@ does not turn the lighting on.
 |---|---|---|---|
 | Lighting | Original, Low, Medium, High | Original | the whole module; the sun shadow maps' resolution (1024, 2048, 4096) |
 | Shadow Strength | 50 to 100 % | 70 % | how much of the sun's light a shadow hides (`shadow_strength` in the preferences, item 45 of a save's block) |
+| Sun Rays | Off, Low, High | Off | light shafts from the sun through openings (`sun_rays`, item 46); see [Sun rays](#sun-rays) |
 | Shadow Distance | Low, Medium, High, Maximum | Maximum | how far mobys cast sun shadows (40, 80, 140 units, or as far as the cascades reach) |
 | Dynamic Shadows | Off, On | Off | point-light cube shadows |
 | Secondary Lights | Off, Game's, All | All | Game's: the game's point lights per pixel; All: also automatic emitters and hand-placed lights |
