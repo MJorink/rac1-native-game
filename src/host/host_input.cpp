@@ -734,7 +734,9 @@ bool Remapper::frame(Bindings& b, const HostState& s) {
             in = mouse(m);
             found = true;
         }
-    if (group && step_ == 0 && !found) {  // a mouse movement before the first key: the mouse as the stick
+    // a mouse movement before the first key: the mouse as the stick (the sticks only, as the page says: the D-pad bound to the
+    // mouse loses the arrow keys the menus are moved with, #61)
+    if (group && step_ == 0 && !found && r.controls[0] != PadControl::kUp) {
         mouse_x_ += s.mouse_dx;
         mouse_y_ += s.mouse_dy;
         if (std::fabs(mouse_x_) > CAPTURE_MOUSE_PIXELS || std::fabs(mouse_y_) > CAPTURE_MOUSE_PIXELS) {
