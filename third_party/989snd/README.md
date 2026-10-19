@@ -33,6 +33,12 @@ Changes from upstream:
   pan moved over handler ticks, the shortest way or in a direction), the voices' base volume kept current
   for the group volumes; `Player::AutoPan`, `SetReverbMode`, `SetReverbDepth`, `AutoReverb`; the master
   volume of group 16 scaled to `0x3fff` (upstream `0x3ffff` overflowed the register).
+- `common/synth.*`, `common/voice.*`, `989snd/vagvoice.cpp`, `player.h`, (rac1) the SPU2's cores: `Synth::AllocVoice`
+  gives each voice the SPU2 voice the IRX's allocator would (the group's range from `SetMixerMode` / `SetGroupVoiceRange`,
+  the lowest free voice; nothing stolen), so its core; with the mixer mode, core 0's output (clamped to 16 bits) feeds
+  core 1's reverb. (host) `Synth::Tick` / `Player::Tick` also render the voices on 5.1 / 7.1 speakers (`multi`): a
+  voice's `Place` (front left / right, positional by its pan, or centre) set by `blocksound_handler.*` / `sfxgrain.cpp`
+  (a sound played or moved with a pan is positional) and the host's streams; the stereo output unchanged.
 - Not taken: `fakeplayer`, `sndplay` (a command-line player), `common/flava.h` (Jak 3).
 - Shims for what the code used from the rest of OpenGOAL: `common/util/Assert.h`,
   `common/log/log.h`, `fmt/format.h` (the few `fmt::format` / `fmt::print` calls),

@@ -22,6 +22,17 @@ The three pages are added to Options in both the pause menu and the main menu, b
 They are built from the game's own menu widgets and data (a copy of the Camera page), so they look
 and behave like the game's own pages. Left and right change a row's value; Cross steps it forward.
 
+### Sound: 5.1 and 7.1
+
+The game's own Sound page (Options > Sound) is kept as it is; its last row, the game's Mono / Stereo switch, also
+offers **5.1** and **7.1**: Cross steps Mono, Stereo, 5.1, 7.1, then Mono again. 5.1 and 7.1 are settings of this PC
+version: the game's own byte stays at Stereo (it is in the game's save and its code reads it), so the game plays
+exactly as in Stereo, and the choice is kept in the preferences (`audio_channels 6` or `8` in
+`advanced_options.txt`), not in the saves. The text shown is "5.1" / "7.1" in every language. The sound device is
+opened again with 6 or 8 channels (7.1 at most, PCM); the world's sounds come from their direction, the dialogue from
+the centre, the music from the front (see [Audio](audio.md#surround-51-and-71)). With every enhancement off (the
+headless runs) the row is the game's own Mono / Stereo.
+
 ### Graphics
 
 `src/game/enhance/graphics.cpp`. Every row changes only what the host draws, never the game's state.
@@ -154,7 +165,7 @@ To try the panel without a new release: `RAC1_UPDATE_FAKE=0.9.0` (or `dev:12`) w
 | What | Where |
 |---|---|
 | Graphics page | `~/.config/rac1-native/graphics_options.txt` |
-| Advanced page (and the update check's Skip Version) | `~/.config/rac1-native/advanced_options.txt` |
+| Advanced page (and the update check's Skip Version, the Sound page's 5.1 / 7.1) | `~/.config/rac1-native/advanced_options.txt` |
 | The update check's last answer | `~/.config/rac1-native/update_check.txt` |
 | Controls | `~/.config/rac1-native/controls.txt` (see [Input](input.md#the-bindings-file-controlstxt)) |
 | The picture settings, the Advanced settings and the mode, per save | `save<N>.pc` next to each save (see [Saves](saves.md#the-pc-settings-next-to-each-save)) |

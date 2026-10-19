@@ -1,4 +1,5 @@
-// The host's audio device (the SPU2's output): 48 kHz stereo.
+// The host's audio device (the SPU2's output): 48 kHz stereo, or (Options > Sound: 5.1 / 7.1, a host setting) 6 / 8
+// channels: the IOP's mirror renders its voices on the speakers too (Synth::Tick), the queue carries that many channels.
 //
 // The sound is made on the game's time, not the device's. The IOP's 989snd advances
 // 1/60 s (800 sample frames) at each vsync the game waits for (orig_main.cpp's sound_vsync, on the
@@ -80,8 +81,11 @@ constexpr int kMinTarget = 2 * kFrame, kMaxTarget = 8 * kFrame, kStartTarget = 3
 const bool g_simple = std::getenv("RAC1_AUDIO_QUEUE") != nullptr && std::strcmp(std::getenv("RAC1_AUDIO_QUEUE"), "0354") == 0;
 const int kRampUsed = g_simple ? 0 : kRamp;
 
-// The ring: written by the game's thread only (w), read by the device's thread only (r).
-std::vector<int16_t> g_ring(kCap * 2);
+// The ring: written by the game's thread only (w), read by the device's thread only (r). g_ch samples a frame (the
+// device's channels: 2, 6 or 8; changed only with the device and the IOP thread stopped, audio_out_set_channels).
+constexpr int kMaxCh = 8;
+std::vector<int16_t> g_ring(kCap * kMaxCh);
+int g_ch = 2;
 std::atomic<uint64_t> g_w{0}, g_r{0};
 std::atomic<double> g_last_push_ms{0.0};
 std::atomic<bool> g_producing{false};  // (pushes seen recently: an underrun while the game was running, not a pause)
@@ -93,7 +97,7 @@ struct Reader {
     double fill_avg = -1;   // the fill seen by the callbacks, smoothed
     int target = g_simple ? kMinTarget : kStartTarget;
     int ramp_in = 0;        // frames of the fade in left
-    int16_t last[2] = {0, 0};
+    int16_t last[kMaxCh] = {};
     double last_dry_ms = 0;  // the last underrun (for the target's lowering)
     double last_cb_ms = 0;
     // the game's production measured over ~1 s windows: below 95 % of the device's rate the game runs slower than real time
@@ -118,7 +122,7 @@ std::atomic<uint64_t> g_alone_frames{0}, g_alone_runs{0};  // (the IOP's mirror 
 std::atomic<double> g_burst_gap_ms{0.0};
 std::atomic<uint64_t> g_alone_total{0};                    // (the whole run's)  // (the device's thread, seen by its first callback)
 
-inline int16_t at(uint64_t i, int c) { return g_ring[(i & (kCap - 1)) * 2 + static_cast<uint64_t>(c)]; }
+inline int16_t at(uint64_t i, int c) { return g_ring[(i & (kCap - 1)) * static_cast<uint64_t>(g_ch) + static_cast<uint64_t>(c)]; }
 
 template <class T>
 void atomic_max(std::atomic<T>& a, T v) {
@@ -144,7 +148,7 @@ FILE* g_device_dump = std::getenv("RAC1_DEVICE_DUMP") != nullptr ? std::fopen(st
 void pull_queue(ma_device* d, void* out, const void* in, ma_uint32 frames_u);
 void pull(ma_device* d, void* out, const void* in, ma_uint32 frames_u) {
     pull_queue(d, out, in, frames_u);
-    if (g_device_dump != nullptr) std::fwrite(out, 4, frames_u, g_device_dump);
+    if (g_device_dump != nullptr) std::fwrite(out, static_cast<size_t>(2 * g_ch), frames_u, g_device_dump);
 }
 void pull_queue(ma_device*, void* out, const void*, ma_uint32 frames_u) {
     int16_t* o = static_cast<int16_t*>(out);
@@ -189,7 +193,7 @@ void pull_queue(ma_device*, void* out, const void*, ma_uint32 frames_u) {
                 fill = rd.target;
             }
         } else {
-            std::memset(o, 0, static_cast<size_t>(frames) * 4);
+            std::memset(o, 0, static_cast<size_t>(frames * g_ch) * 2);
             return;
         }
     }
@@ -227,7 +231,7 @@ void pull_queue(ma_device*, void* out, const void*, ma_uint32 frames_u) {
         const uint64_t k = static_cast<uint64_t>(pos);
         if (static_cast<int64_t>(k + 1) >= fill) break;  // (the next two samples needed)
         const double f = pos - static_cast<double>(k);
-        for (int c = 0; c < 2; ++c) {
+        for (int c = 0; c < g_ch; ++c) {
             double v = at(r + k, c) * (1.0 - f) + at(r + k + 1, c) * f;
             if (xfade > 0) {  // (the skipped position faded out, the new one in)
                 const double a = static_cast<double>(kRamp - xfade) / kRamp;
@@ -236,7 +240,7 @@ void pull_queue(ma_device*, void* out, const void*, ma_uint32 frames_u) {
             }
             if (rd.ramp_in > 0) v *= static_cast<double>(kRamp - rd.ramp_in) / kRamp;
             const int16_t s = static_cast<int16_t>(std::clamp(std::lround(v), -32768L, 32767L));
-            o[i * 2 + c] = s;
+            o[i * g_ch + c] = s;
             rd.last[c] = s;
         }
         if (xfade > 0) --xfade;
@@ -250,10 +254,9 @@ void pull_queue(ma_device*, void* out, const void*, ma_uint32 frames_u) {
         const int n = frames - i;
         for (int j = 0; j < n; ++j) {
             const double a = j < kRampUsed ? 1.0 - static_cast<double>(j + 1) / kRampUsed : 0.0;
-            o[(i + j) * 2] = static_cast<int16_t>(rd.last[0] * a);
-            o[(i + j) * 2 + 1] = static_cast<int16_t>(rd.last[1] * a);
+            for (int c = 0; c < g_ch; ++c) o[(i + j) * g_ch + c] = static_cast<int16_t>(rd.last[c] * a);
         }
-        rd.last[0] = rd.last[1] = 0;
+        for (int16_t& l : rd.last) l = 0;
         rd.primed = false;
         rd.frac = 0.0;
         // a pause / a long load (no push for 250 ms) is not the host's jitter: counted apart, the target kept
@@ -331,13 +334,17 @@ void ring_push(const int16_t* pcm, int frames);
 // orig: (host) the IOP's own processor (ADR 0013): the mirror's frames queued as the game's vsyncs come, alone when they do not
 void iop_loop() {
     int16_t buf[kFrame * 2];
+    int16_t multi[kFrame * kMaxCh];  // (5.1 / 7.1: the speakers' output, what is queued)
+    const int ch = g_ch;
+    int16_t* const mp = ch > 2 ? multi : nullptr;
+    int16_t* const queued = ch > 2 ? multi : buf;
     int run = 0;          // the frames of the current run alone
     double run_t0 = 0.0;  // the game's last vsync before it
     while (g_iop_run.load(std::memory_order_relaxed)) {
         bool did = false;
         const double last_before = g_last_vsync_ms.load(std::memory_order_relaxed);
-        while (rac1::snd989_mirror_next(buf)) {
-            ring_push(buf, kFrame);
+        while (rac1::snd989_mirror_next(buf, mp, ch)) {
+            ring_push(queued, kFrame);
             g_last_vsync_ms.store(now_ms(), std::memory_order_relaxed);
             did = true;
         }
@@ -362,8 +369,8 @@ void iop_loop() {
         const bool stalled = (step_t0 != 0.0 && t - step_t0 > kAloneGapMs && t - last > kAloneGapMs) || t - last > gap_limit;
         if (g_alone_ok.load(std::memory_order_relaxed) && !g_iop_verify && last != 0.0 && stalled && fill < g_alone_fill) {
             if (run++ == 0) run_t0 = last;
-            rac1::snd989_mirror_alone(buf);
-            ring_push(buf, kFrame);
+            rac1::snd989_mirror_alone(buf, mp, ch);
+            ring_push(queued, kFrame);
             g_alone_frames.fetch_add(1, std::memory_order_relaxed);
             g_alone_total.fetch_add(1, std::memory_order_relaxed);
             continue;
@@ -372,10 +379,62 @@ void iop_loop() {
     }
 }
 
+// orig: (host) the device opened with `channels` (2, 6: 5.1, 8: 7.1), its channel map the WAVE order; a device that
+// does not take them (fewer channels of its own) opened in stereo, said once
+bool device_open(int channels) {
+    ma_device_config c = ma_device_config_init(ma_device_type_playback);
+    c.playback.format = ma_format_s16;
+    c.playback.channels = static_cast<ma_uint32>(channels);
+    ma_channel map[kMaxCh] = {MA_CHANNEL_FRONT_LEFT, MA_CHANNEL_FRONT_RIGHT, MA_CHANNEL_FRONT_CENTER, MA_CHANNEL_LFE,
+                              MA_CHANNEL_SIDE_LEFT,  MA_CHANNEL_SIDE_RIGHT,  MA_CHANNEL_NONE,         MA_CHANNEL_NONE};
+    if (channels == 8) {
+        map[4] = MA_CHANNEL_BACK_LEFT;
+        map[5] = MA_CHANNEL_BACK_RIGHT;
+        map[6] = MA_CHANNEL_SIDE_LEFT;
+        map[7] = MA_CHANNEL_SIDE_RIGHT;
+    }
+    if (channels > 2) c.playback.pChannelMap = map;
+    c.sampleRate = 48000;
+    c.dataCallback = pull;
+    c.periodSizeInMilliseconds = std::getenv("RAC1_AUDIO_PERIOD_MS") != nullptr ? static_cast<ma_uint32>(std::atoi(std::getenv("RAC1_AUDIO_PERIOD_MS"))) : 10;
+    c.periods = std::getenv("RAC1_AUDIO_PERIODS") != nullptr ? static_cast<ma_uint32>(std::atoi(std::getenv("RAC1_AUDIO_PERIODS"))) : 3;
+    g_ch = channels;
+    if (ma_device_init(&g_context, &c, &g_device) != MA_SUCCESS) {
+        if (channels == 2) return false;
+        std::fprintf(stderr, "[audio] the device cannot be opened with %d channels: stereo\n", channels);
+        return device_open(2);
+    }
+    if (channels > 2 && static_cast<int>(g_device.playback.internalChannels) < channels) {
+        std::fprintf(stderr, "[audio] the device has %u channels, not %d: stereo\n", g_device.playback.internalChannels, channels);
+        ma_device_uninit(&g_device);
+        return device_open(2);
+    }
+    if (ma_device_start(&g_device) != MA_SUCCESS) {
+        ma_device_uninit(&g_device);
+        return false;
+    }
+    std::fprintf(stderr, "[audio] device: %s, %u Hz, %d channels%s, period %u frames x %u\n", ma_get_backend_name(g_context.backend), g_device.sampleRate, g_ch,
+                 g_ch == 8 ? " (7.1)" : g_ch == 6 ? " (5.1)" : "", g_device.playback.internalPeriodSizeInFrames, g_device.playback.internalPeriods);
+    return true;
+}
+
+// orig: (host) the IOP thread started (the mirror's frames queued)
+void iop_thread_start() {
+    if (!rac1::snd989_mirror_enabled()) return;
+    g_iop_run.store(true);
+    g_iop = std::thread([] {
+        if (rac1::host_priority_enabled()) {  // (the queue's producer now: real-time as the device's thread, one step under it)
+            const uint64_t tid = rac1::platform::thread_id();
+            std::fprintf(stderr, "[audio] the IOP thread %llu real-time: %s\n", static_cast<unsigned long long>(tid), rac1::host_priority_realtime(tid, 9) ? "yes" : "no (rtkit refused or absent)");
+        }
+        iop_loop();
+    });
+}
 }  // namespace
 
-// orig: (host) the SPU2's output: the device opened
-bool audio_out_start() {
+// orig: (host) the SPU2's output: the device opened (`channels`: 2, or 6 / 8 for 5.1 / 7.1)
+bool audio_out_start(int channels) {
+    if (channels != 6 && channels != 8) channels = 2;
     ma_context_config cc = ma_context_config_init();
     cc.threadPriority = ma_thread_priority_realtime;  // (granted where the system allows it, else the default)
     // (testing) RAC1_AUDIO_DEVICE=null: miniaudio's null backend (a timer pulls the queue at 48 kHz, nothing is heard): a
@@ -387,35 +446,17 @@ bool audio_out_start() {
         std::fprintf(stderr, "rac1-native: no audio context\n");
         return false;
     }
-    ma_device_config c = ma_device_config_init(ma_device_type_playback);
-    c.playback.format = ma_format_s16;
-    c.playback.channels = 2;
-    c.sampleRate = 48000;
-    c.dataCallback = pull;
-    c.periodSizeInMilliseconds = std::getenv("RAC1_AUDIO_PERIOD_MS") != nullptr ? static_cast<ma_uint32>(std::atoi(std::getenv("RAC1_AUDIO_PERIOD_MS"))) : 10;
-    c.periods = std::getenv("RAC1_AUDIO_PERIODS") != nullptr ? static_cast<ma_uint32>(std::atoi(std::getenv("RAC1_AUDIO_PERIODS"))) : 3;
-    if (ma_device_init(&g_context, &c, &g_device) != MA_SUCCESS || ma_device_start(&g_device) != MA_SUCCESS) {
+    if (!device_open(channels)) {
         std::fprintf(stderr, "rac1-native: no audio device\n");
         ma_context_uninit(&g_context);
         return false;
     }
-    std::fprintf(stderr, "[audio] device: %s, %u Hz, period %u frames x %u\n", ma_get_backend_name(g_context.backend), g_device.sampleRate,
-                 g_device.playback.internalPeriodSizeInFrames, g_device.playback.internalPeriods);
     g_sum.last_ms = now_ms();
     g_rd.last_dry_ms = g_sum.last_ms;
     g_target_now.store(g_rd.target);
     g_started = true;
     g_alone_fill = std::max<int>(2 * kFrame, static_cast<int>(g_device.playback.internalPeriodSizeInFrames) + kFrame / 2);
-    if (rac1::snd989_mirror_enabled()) {
-        g_iop_run.store(true);
-        g_iop = std::thread([] {
-            if (rac1::host_priority_enabled()) {  // (the queue's producer now: real-time as the device's thread, one step under it)
-                const uint64_t tid = rac1::platform::thread_id();
-                std::fprintf(stderr, "[audio] the IOP thread %llu real-time: %s\n", static_cast<unsigned long long>(tid), rac1::host_priority_realtime(tid, 9) ? "yes" : "no (rtkit refused or absent)");
-            }
-            iop_loop();
-        });
-    }
+    iop_thread_start();
     if (rac1::host_priority_enabled())
         std::thread([] {  // (the device's thread real-time once its first callback named it; the D-Bus call off the game's thread)
             for (int i = 0; i < 200 && g_device_tid.load() == 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -426,11 +467,39 @@ bool audio_out_start() {
     return true;
 }
 
-// orig: (host) the SPU2's output: `frames` stereo sample frames made on the game's time, queued for the device (the game's
-// thread, without the IOP's mirror)
-void audio_out_push(const int16_t* pcm, int frames) {
+// orig: (host) the SPU2's output: `frames` stereo sample frames made on the game's time (`multi`: the same on the
+// device's 5.1 / 7.1 speakers, audio_out_channels), queued for the device (the game's thread, without the IOP's mirror)
+void audio_out_push(const int16_t* pcm, const int16_t* multi, int frames) {
     if (!g_started || g_iop_run.load(std::memory_order_relaxed)) return;
-    ring_push(pcm, frames);
+    if (g_ch > 2 && multi == nullptr) return;  // (the device just reopened with another layout: the next vsync's)
+    ring_push(g_ch > 2 ? multi : pcm, frames);
+}
+
+// orig: (host) the device's channels (2, 6, 8), 2 without a device
+int audio_out_channels() { return g_started ? g_ch : 2; }
+
+// orig: (host) Options > Sound's 5.1 / 7.1 / stereo (the host's choice): the device opened again with that many
+// channels (the IOP thread stopped meanwhile, the queue emptied: a moment of silence); the game's thread
+void audio_out_set_channels(int channels) {
+    if (channels != 6 && channels != 8) channels = 2;
+    if (!g_started || channels == g_ch) return;
+    const bool iop = g_iop_run.exchange(false);
+    if (iop) g_iop.join();
+    ma_device_uninit(&g_device);
+    g_w.store(0);
+    g_r.store(0);
+    const int target = g_rd.target;
+    g_rd = Reader{};
+    g_rd.target = target;
+    if (!device_open(channels)) {
+        std::fprintf(stderr, "rac1-native: no audio device\n");
+        ma_context_uninit(&g_context);
+        g_started = false;
+        if (iop) rac1::snd989_mirror_disable();
+        return;
+    }
+    g_alone_fill = std::max<int>(2 * kFrame, static_cast<int>(g_device.playback.internalPeriodSizeInFrames) + kFrame / 2);
+    if (iop) iop_thread_start();
 }
 
 // orig: (host) the host lets the IOP run alone while the game's thread stalls (not while it holds the game: a pause, a slow speed)
@@ -455,10 +524,10 @@ void ring_push(const int16_t* pcm, int frames) {
     const uint64_t room = kCap - (w - r);
     const uint64_t n = std::min<uint64_t>(static_cast<uint64_t>(frames), room);
     if (n < static_cast<uint64_t>(frames)) g_overflow_frames.fetch_add(static_cast<uint64_t>(frames) - n, std::memory_order_relaxed);
+    const uint64_t ch = static_cast<uint64_t>(g_ch);
     for (uint64_t i = 0; i < n; ++i) {
-        const uint64_t k = ((w + i) & (kCap - 1)) * 2;
-        g_ring[k] = pcm[i * 2];
-        g_ring[k + 1] = pcm[i * 2 + 1];
+        const uint64_t k = ((w + i) & (kCap - 1)) * ch;
+        for (uint64_t c = 0; c < ch; ++c) g_ring[k + c] = pcm[i * ch + c];
     }
     g_w.store(w + n, std::memory_order_release);
     if (t - g_sum.last_ms >= 10000.0) {

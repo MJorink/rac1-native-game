@@ -20,8 +20,12 @@ namespace rac1 {
 
 void snd989_iop_start();  // the servers registered with the SIF RPC layer
 void snd989_iop_stop();   // every sound stopped and bank unloaded
-// The game's IOP's output (stereo, 48 kHz, 16 bit), `frames` frames; silence before the start.
-void snd989_iop_render(int16_t* out, int frames);
+// The game's IOP's output (stereo, 48 kHz, 16 bit), `frames` frames; silence before the start. `multi` (host): also the
+// output on 5.1 / 7.1 speakers (`channels` 6 / 8 per frame, the WAVE order FL FR FC LFE, then SL SR / BL BR SL SR; the
+// voices placed by Synth::Tick), else nullptr.
+void snd989_iop_render(int16_t* out, int frames, int16_t* multi = nullptr, int channels = 2);
+// The movie's samples (as movie_hw_audio_add) added to a 5.1 / 7.1 output's front left / right.
+void snd989_movie_add_multi(int16_t* multi, int channels, const int16_t* movie, int movie_frames, float gl, float gr);
 
 // Host knobs (debug menu): the output's gain (0 mutes), the command trace (RAC1_SND_TRACE),
 // and the voices playing.
@@ -44,10 +48,11 @@ int snd989_mirror_queued();
 bool snd989_mirror_wait(double ms);
 // The audio thread: the commands up to the next queued vsync applied and its 800 frames rendered into `out`; false
 // (nothing done) when no vsync is queued.
-bool snd989_mirror_next(int16_t* out);
+// `multi`: also the 5.1 / 7.1 output (snd989_iop_render), else nullptr.
+bool snd989_mirror_next(int16_t* out, int16_t* multi = nullptr, int channels = 2);
 // The audio thread: the game's thread is stalled. The commands it already sent applied, then 800 frames rendered by the
 // mirror alone, its streams' reader run after them (the IRX's reader reads on whatever the EE does).
-void snd989_mirror_alone(int16_t* out);
+void snd989_mirror_alone(int16_t* out, int16_t* multi = nullptr, int channels = 2);
 // The mirror's counters, printed at exit: vsyncs rendered, frames rendered alone, (RAC1_IOP_VERIFY) vsyncs equal / not
 // equal to the game's mix before the first frame alone.
 void snd989_mirror_report();

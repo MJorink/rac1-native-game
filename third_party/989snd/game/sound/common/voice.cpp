@@ -168,6 +168,7 @@ s16Output Voice::Run() {
   }
 
   sample = ApplyVolume(sample, mADSR.Level());
+  mLastSample = sample;
   s16 left = ApplyVolume(sample, mVolume.left.GetCurrent());
   s16 right = ApplyVolume(sample, mVolume.right.GetCurrent());
 

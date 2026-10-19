@@ -117,11 +117,11 @@ int32_t command(Iop& io, uint32_t id, const uint32_t* a) {
     case 0x18: p.StopAllSounds(); return 0;
     case 0x09: p.SetMasterVolume(a[0], s(1)); return 0;
     case 0x0b: p.SetPlaybackMode(s(0)); return 0;
-    case 0x0d: return 0;  // snd_SetMixerMode
+    case 0x0d: p.SetMixerMode(s(0), s(1)); return 0;  // snd_SetMixerMode (0x149e8): core 0 into core 1's reverb
     case 0x10:
         p.AutoReverb(static_cast<s16>(s(1)), s(2), s(3));
         return 0;
-    case 0x4e: return 0;  // snd_SetGroupVoiceRange
+    case 0x4e: p.SetGroupVoiceRange(s(0), s(1), s(2)); return 0;  // snd_SetGroupVoiceRange (0x14ad4)
     case 0x50:
         p.SetReverbMode(s(1), s(3), s(4));
         p.SetReverbDepth(static_cast<s16>(s(2)), static_cast<s16>(s(2)));
@@ -225,20 +225,39 @@ void mirror_apply(Op& op) {
     }
 }
 
-void render(Iop& io, int16_t* out, int frames) {
+// `multi`: also the 5.1 / 7.1 speakers' output (`channels` 6 / 8 per frame; Synth::Tick), else nullptr
+void render(Iop& io, int16_t* out, int frames, int16_t* multi = nullptr, int channels = 2) {
     std::scoped_lock lock(io.render_lock);
+    if (multi == nullptr) channels = 2;
     if (!io.player) {
         std::memset(out, 0, static_cast<size_t>(frames) * 4);
+        if (multi != nullptr) std::memset(multi, 0, static_cast<size_t>(frames * channels) * 2);
         return;
     }
-    io.player->Tick(reinterpret_cast<snd::s16Output*>(out), frames);
+    io.player->Tick(reinterpret_cast<snd::s16Output*>(out), frames, multi, channels);
     const float gain = g_snd989_gain;
     if (gain != 1.0f) {
-        for (int i = 0; i < frames * 2; ++i) {
-            const float v = static_cast<float>(out[i]) * gain;
-            out[i] = static_cast<int16_t>(std::clamp(v, -32768.0f, 32767.0f));
-        }
+        auto scale = [gain](int16_t* b, int n) {
+            for (int i = 0; i < n; ++i) {
+                const float v = static_cast<float>(b[i]) * gain;
+                b[i] = static_cast<int16_t>(std::clamp(v, -32768.0f, 32767.0f));
+            }
+        };
+        scale(out, frames * 2);
+        if (multi != nullptr) scale(multi, frames * channels);
     }
+}
+
+// orig: (host) the movie's sound in a 5.1 / 7.1 output: on the front left / right (its stereo mix's samples)
+void movie_add_multi(int16_t* multi, int channels, const int16_t* movie, int movie_frames, float gl, float gr) {
+    int16_t st[800 * 2] = {};
+    const int n = std::min(movie_frames, 800);
+    movie_hw_audio_add(st, movie, n, gl, gr);
+    for (int i = 0; i < n; ++i)
+        for (int c = 0; c < 2; ++c) {
+            int16_t& o = multi[i * channels + c];
+            o = static_cast<int16_t>(std::clamp(o + st[i * 2 + c], -32768, 32767));
+        }
 }
 
 // The command server: 0x4d a batch (word 0 the count, then u16 id, u16 size, the data padded
@@ -371,7 +390,11 @@ void snd989_iop_stop() {
     }
 }
 
-void snd989_iop_render(int16_t* out, int frames) { render(game(), out, frames); }
+void snd989_iop_render(int16_t* out, int frames, int16_t* multi, int channels) { render(game(), out, frames, multi, channels); }
+
+void snd989_movie_add_multi(int16_t* multi, int channels, const int16_t* movie, int movie_frames, float gl, float gr) {
+    movie_add_multi(multi, channels, movie, movie_frames, gl, gr);
+}
 
 int snd989_iop_active_sounds() {
     Iop& io = game();
@@ -418,7 +441,7 @@ bool snd989_mirror_wait(double ms) {
 }
 
 // orig: (host) ADR 0013: the mirror's next vsync
-bool snd989_mirror_next(int16_t* out) {
+bool snd989_mirror_next(int16_t* out, int16_t* multi, int channels) {
     std::deque<Op> ops;
     {
         std::scoped_lock lock(g_rec.m);
@@ -433,8 +456,11 @@ bool snd989_mirror_next(int16_t* out) {
     }
     for (Op& op : ops) mirror_apply(op);
     Op& v = ops.back();
-    render(mirror(), out, 800);
-    if (!v.movie.empty()) movie_hw_audio_add(out, v.movie.data(), static_cast<int>(v.movie.size() / 2), v.gl, v.gr);
+    render(mirror(), out, 800, multi, channels);
+    if (!v.movie.empty()) {
+        movie_hw_audio_add(out, v.movie.data(), static_cast<int>(v.movie.size() / 2), v.gl, v.gr);
+        if (multi != nullptr) movie_add_multi(multi, channels, v.movie.data(), static_cast<int>(v.movie.size() / 2), v.gl, v.gr);
+    }
     ++g_rec.rendered;
     if (!v.game_pcm.empty() && g_rec.alone == 0) {
         if (std::memcmp(v.game_pcm.data(), out, 800 * 4) == 0) {
@@ -447,7 +473,7 @@ bool snd989_mirror_next(int16_t* out) {
 }
 
 // orig: (host) ADR 0013: the IOP running while the EE is busy
-void snd989_mirror_alone(int16_t* out) {
+void snd989_mirror_alone(int16_t* out, int16_t* multi, int channels) {
     std::deque<Op> ops;
     {
         std::scoped_lock lock(g_rec.m);
@@ -457,7 +483,7 @@ void snd989_mirror_alone(int16_t* out) {
         }
     }
     for (Op& op : ops) mirror_apply(op);
-    render(mirror(), out, 800);
+    render(mirror(), out, 800, multi, channels);
     {
         Iop& m = mirror();
         std::scoped_lock lock(m.render_lock);
