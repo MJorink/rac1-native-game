@@ -95,13 +95,21 @@ Gs& gs_global() {
 }
 
 uint32_t Gs::addr32(uint32_t bp, uint32_t bw, uint32_t x, uint32_t y) {
+    static const std::array<uint32_t, 64 * 32> in_page = [] {
+        std::array<uint32_t, 64 * 32> t{};
+        for (uint32_t py = 0; py < 32; ++py) {
+            for (uint32_t px = 0; px < 64; ++px) {
+                const uint32_t block = BLOCK32[py / 8][px / 8];
+                const uint32_t bx = px % 8, by = py % 8;
+                const uint32_t pix = (by / 2) * 16 + COL32[by % 2][bx];
+                t[py * 64 + px] = (block * 64 + pix) * 4;
+            }
+        }
+        return t;
+    }();
     const uint32_t ppr = std::max(1u, bw);
-    const uint32_t page = x / 64 + (y / 32) * ppr;
-    const uint32_t px = x % 64, py = y % 32;
-    const uint32_t block = BLOCK32[py / 8][px / 8];
-    const uint32_t bx = px % 8, by = py % 8;
-    const uint32_t pix = (by / 2) * 16 + COL32[by % 2][bx];
-    return ((bp * 64 + page * 2048 + block * 64 + pix) * 4) & (VRAM - 1);
+    const uint32_t page = (x >> 6) + (y >> 5) * ppr;
+    return (bp * 256 + page * 8192 + in_page[((y & 31) << 6) | (x & 63)]) & (VRAM - 1);
 }
 uint32_t Gs::addr16(uint32_t bp, uint32_t bw, uint32_t x, uint32_t y, bool s) {
     const uint32_t ppr = std::max(1u, bw);
@@ -167,6 +175,7 @@ void Gs::note_change(uint32_t a, uint32_t n) {
         }
         wr_log_.push_back({++wr_seq_, a, a + n});
         wr_open_ = true;
+        ++gen_;
         return;
     }
     WrRange& r = wr_log_.back();
@@ -189,9 +198,18 @@ bool Gs::snap_stale(const TexSnap& s) const {
 void Gs::write_pixel(uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y, uint32_t v) {
     // the bytes a write of this format touches (a, n), compared before and after: a write of what is
     // there is no change (the snapshots of textures stay valid)
+    if (psm == CT32) {
+        const uint32_t a0 = addr32(bp, bw, x, y);
+        const uint32_t old = r32(&vram_[a0]);
+        if (old != v) {
+            std::memcpy(&vram_[a0], &v, 4);
+            note_change(a0, 4);
+            if (vundo_on_) vundo_.push_back({a0, 4, old});
+        }
+        return;
+    }
     uint32_t a0 = 0, n0 = 0;
     switch (psm) {
-    case CT32: a0 = addr32(bp, bw, x, y); n0 = 4; break;
     case CT24: a0 = addr32(bp, bw, x, y); n0 = 3; break;
     case CT16: case CT16S: a0 = addr16(bp, bw, x, y, psm == CT16S); n0 = 2; break;
     case T8: a0 = addr8(bp, bw, x, y); n0 = 1; break;
@@ -213,27 +231,19 @@ void Gs::write_pixel(uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_
 }
 
 void Gs::write_ct32_rect(uint32_t bp, uint32_t bw, uint32_t w, uint32_t h, const uint32_t* px) {
-    // the byte offset of each pixel inside its 64 x 32 page (addr32's layout), once
-    static const std::vector<uint32_t> in_page = [] {
-        std::vector<uint32_t> t(64 * 32);
-        for (uint32_t y = 0; y < 32; ++y)
-            for (uint32_t x = 0; x < 64; ++x) t[y * 64 + x] = addr32(0, 1, x, y);
-        return t;
-    }();
-    const uint32_t ppr = std::max(1u, bw);
     uint32_t lo = 0xffffffffu, hi = 0;
     for (uint32_t y = 0; y < h; ++y) {
         const uint32_t* row = px + static_cast<size_t>(y) * w;
-        const uint32_t* tr = &in_page[(y % 32) * 64];
         for (uint32_t x = 0; x < w; ++x) {
-            const uint32_t a = (bp * 256 + (x / 64 + (y / 32) * ppr) * 8192 + tr[x % 64]) & (VRAM - 1);
-            std::memcpy(&vram_[a], &row[x], 4);
-            if (a < lo) lo = a;
-            if (a + 4 > hi) hi = a + 4;
+            const uint32_t a = addr32(bp, bw, x, y);
+            if (r32(&vram_[a]) != row[x]) {
+                std::memcpy(&vram_[a], &row[x], 4);
+                if (a < lo) lo = a;
+                if (a + 4 > hi) hi = a + 4;
+            }
         }
     }
     if (hi > lo) {
-        ++gen_;
         wr_open_ = false;
         note_change(lo, hi - lo);
         wr_open_ = false;
@@ -488,7 +498,7 @@ void Gs::write_reg(uint32_t reg, uint64_t v) {
     }
     case 0x53:  // TRXDIR: host -> local
         if (bits(v, 0, 2) == 0) {
-            xfer_ = true; xx_ = 0; xy_ = 0; xpend_.clear(); ++gen_;
+            xfer_ = true; xx_ = 0; xy_ = 0; xpend_.clear(); wr_open_ = false;
             if (scr_bw_ != 0) screen_transfer(bits(regs_[0x50], 32, 14));
         }
         else xfer_ = false;
@@ -581,8 +591,10 @@ void Gs::gif(const uint8_t* p, uint32_t qwc) {
                 --tag_left_;
             }
         } else {
-            image_data(q, 16);
-            --tag_left_;
+            const uint32_t take = std::min(tag_left_, qwc - i);
+            image_data(q, take * 16);
+            tag_left_ -= take;
+            i += take - 1;
         }
     }
 }
@@ -871,13 +883,36 @@ void Gs::screen_transfer(uint32_t dbp) {
 
 // the type-7 primitive's picture: the frame's memory now
 void Gs::screen_picture() {
+    const uint32_t w = scr_bw_ * 64, h = scr_h_;
+    const uint32_t lo = scr_bp_ * 256, hi = lo + w * h * 4;
+    if (scr_snap_ != nullptr && scr_snap_bp_ == scr_bp_ && scr_snap_bw_ == scr_bw_ && scr_snap_h_ == scr_h_ && scr_seq_ >= wr_floor_) {
+        bool stale = false;
+        for (size_t i = wr_log_.size(); i-- > 0;) {
+            const WrRange& r = wr_log_[i];
+            if (r.seq <= scr_seq_) break;
+            if (r.lo < hi && r.hi > lo) { stale = true; break; }
+        }
+        if (!stale) {
+            prims_[static_cast<size_t>(scr_prim_)].tex = scr_snap_;
+            scr_prim_ = -1;
+            return;
+        }
+    }
     auto img = std::make_shared<TexImage>();
     img->id = ++tex_ids_;
-    img->w = static_cast<int>(scr_bw_ * 64);
-    img->h = static_cast<int>(scr_h_);
-    img->px.resize(static_cast<size_t>(img->w) * img->h);
-    for (int y = 0; y < img->h; ++y)
-        for (int x = 0; x < img->w; ++x) img->px[static_cast<size_t>(y) * img->w + x] = read_pixel(CT32, scr_bp_, scr_bw_, static_cast<uint32_t>(x), static_cast<uint32_t>(y));
+    img->w = static_cast<int>(w);
+    img->h = static_cast<int>(h);
+    img->px.resize(static_cast<size_t>(w) * h);
+    for (uint32_t y = 0; y < h; ++y) {
+        uint32_t* row = img->px.data() + static_cast<size_t>(y) * w;
+        for (uint32_t x = 0; x < w; ++x) row[x] = r32(&vram_[addr32(scr_bp_, scr_bw_, x, y)]);
+    }
+    wr_open_ = false;
+    scr_seq_ = wr_seq_;
+    scr_snap_bp_ = scr_bp_;
+    scr_snap_bw_ = scr_bw_;
+    scr_snap_h_ = scr_h_;
+    scr_snap_ = img;
     prims_[static_cast<size_t>(scr_prim_)].tex = std::move(img);
     scr_prim_ = -1;
 }
