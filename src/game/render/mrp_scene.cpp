@@ -68,6 +68,12 @@ void on_draw(uint32_t moby, uint32_t chain_begin, uint32_t chain_end, uint32_t r
         g_have_camera = true;
     }
     MrpMoby m;
+    if (!rt) {  // (the view the loop uses now against the frame's)
+        auto same = [](const MrpVec4& a, const MrpVec4& b, size_t n) { return std::memcmp(&a, &b, n) == 0; };
+        bool s = same(f.cam_pos, vec4_at(OV(0x00166dc0)), 12);
+        for (uint32_t i = 0; s && i < 4; ++i) s = same(i < 3 ? f.view_rows[i] : f.view_trans, vec4_at(OV(0x00166cc0) + 16 * i), 16);
+        m.other_view = !s;
+    }
     m.moby = moby;
     m.class_ptr = lwu(moby + 0x24);
     m.class_id = lh(moby + 0xa6);
