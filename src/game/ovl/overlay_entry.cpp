@@ -634,6 +634,35 @@ void level_time_stat() {
     if (static_cast<int32_t>(lhu(row + 2)) < t) sh(0x00141680 + lwu(0x0015ed84) * 8 + 2, static_cast<uint32_t>(frame_scale_i(lw(0x0015eea4)) / 0x258));
 }
 
+static bool overlay_frame_end(int32_t mode);
+namespace {
+// Game mode 1's movie still playing. The PS2 runs the whole movie inside the mode's update 0x2999a8 (the player's own
+// loop waits for its vsyncs), in one pass of the main loop; the host runs one picture of it a host frame. The host
+// frames after the pass's first are the rest of that one pass, inside 0x2999a8: nothing else of the pass runs again
+// (its start, the frame's end: the frame counter 0x15f3f8, the save's time played 0x15ee24, the frames-in-mode
+// count). Before, every host frame of a movie ran a whole pass around it: the time played counted the movie's
+// length, 60 a second, where the PS2's does not count it at all (#24).
+bool g_movie_pass = false;
+
+// Whether game mode 1's update 0x2999a8 is over after a call of the host's split of it (movie_mode_update): its end
+// 0x2997c8 cuts the frame short (0x15f5d8 set), as a movie started again by the talk's next record does (0x2995d0);
+// the player's frames leave it as the pass's start did (0).
+// orig: (host)
+bool movie_update_over() { return lw(OV(0x0015f5d8)) != 0; }
+}  // namespace
+
+// One host frame of the main loop's pass in game mode 1, from its update's call on (0x245fc0): one picture of the
+// movie (the pass's first frame: the movie's start too); once the update is over, the rest of the pass
+// (overlay_frame_end) and `done` set. False when the game quits (0x15f570).
+// orig: (host) a part of 0x00245c28's pass in game mode 1 (0x245fc0 .. its end)
+bool overlay_movie_pass(bool& done) {
+    movie_mode_update();
+    done = movie_update_over();
+    g_movie_pass = !done;
+    if (!done) return lw(OV(0x0015f570)) == 0;
+    return overlay_frame_end(1);
+}
+
 // One pass of the main loop: the frame's counters and packets, the mode's update and drawing
 // (0 gameplay: the pad, 0x297f78, 0x1f8e30), the frames-in-mode count, the end of the frame
 // (debug strings, timing, an extra update when the frame ran long, the frame counter, the
@@ -641,6 +670,8 @@ void level_time_stat() {
 // game quits (0x15f570).
 // orig: 0x00245c28 (one pass of its main loop)
 bool overlay_frame() {
+    bool movie_done = false;
+    if (g_movie_pass) return overlay_movie_pass(movie_done);  // (the rest of the pass that started the movie)
     const uint32_t cnt = host_rcnt1();
     sd(0x0015ed40, ld(0x0015ed40) + cnt);
     ee_t1_reset();  // (sw zero, T1_COUNT)
@@ -659,7 +690,7 @@ bool overlay_frame() {
             gameplay_frame();
             render_frame_gate();
             break;
-        case 1: movie_mode_update(); break;
+        case 1: return overlay_movie_pass(movie_done);  // (the movie goes on in the next host frames: g_movie_pass)
         case 2: pad_read_packet(0x0013c940, g_host_pad_packet, 6); cutscene_update(); mode2_draw(); break;
         case 3: pad_read_packet(0x0013c940, g_host_pad_packet, 6); menu_update(); menu_draw_mode3(); break;
         case 4: pad_read_packet(0x0013c940, g_host_pad_packet, 6); screen_update(); screen_draw_mode4(); break;
@@ -669,6 +700,12 @@ bool overlay_frame() {
         case -1: pad_read_packet(0x0013c940, g_host_pad_packet, 6); TODO_PORT(0x001f4598, "mode -1 update")(); TODO_PORT(0x001f58e0, "mode -1 draw")(); break;
         default: break;
     }
+    return overlay_frame_end(mode);
+}
+
+// orig: (helper) the rest of 0x00245c28's pass after the game mode's update (`mode` the mode it ran): the
+// frames-in-mode count, the frame's end, the restart of the level when the hero died. False when the game quits.
+static bool overlay_frame_end(int32_t mode) {
     if (lw(OV(0x0015f5c4)) == mode) {
         sw(OV(0x0015f5c8), static_cast<uint32_t>(lw(OV(0x0015f5c8)) + 1));
     } else {
