@@ -710,6 +710,7 @@ struct ScenePicture {
     bool menu_pic = false;  // `pic` holds the frame the pause menu's start stored (its background, at the window's resolution)
     int shown_view[4] = {0, 0, 0, 0};
     uint64_t hash = 0;                   // the frame's pixels as store() wrote them (0: none)
+    uint64_t match_id = 0;               // last TexImage::id confirmed to match `hash`
     GLuint rb_fbo = 0, rb_tex = 0;       // the frame's resolution: the picture read back / the replica's frame drawn
     int rb_w = 0, rb_h = 0;
     static uint64_t hash_of(const uint32_t* px, size_t n) {
@@ -746,8 +747,7 @@ struct ScenePicture {
         pending = true;
     }
     // the game reads the GS memory at block bp (libgraph's store): at the frame, the kept picture written there first, once
-    // the last frame shown, read back asynchronously at the frame's resolution (a PBO filled after the frame is drawn,
-    // its fence): store() then takes it without waiting for the GPU (a synchronous read stalled the pause by ~50 ms)
+    // the Scene frame (or on-demand when the pause menu stores the last frame shown), read back at the frame's resolution
     GLuint pf_fbo = 0, pf_tex = 0, pf_pbo = 0;
     GLsync pf_fence = nullptr;
     int pf_w = 0, pf_h = 0;
@@ -788,28 +788,33 @@ struct ScenePicture {
     }
     void store(uint32_t bp, uint32_t psm) {
         const bool from_shown = !pending && shown != nullptr && shown->fbo != 0;
-        if ((!pending && !from_shown) || psm != 0 || !pf_valid) return;
+        if ((!pending && !from_shown) || psm != 0) return;
         const uint32_t frame = lwu(0x0013cf20);  // FRAME_1 of the frame's draw environment 0x13cf10 (render_passes.cpp)
         const uint32_t fbp = frame & 0x1ff, fbw = (frame >> 16) & 0x3f, fh = lhu(0x001518d2);
         if (fbw == 0 || fh == 0 || bp < fbp * 32 || bp >= fbp * 32 + fbw * 64 * fh * 4 / 256) return;
         const int w = static_cast<int>(fbw * 64), h = static_cast<int>(fh);
-        if (w != pf_w || h != pf_h) return;
-        if (from_shown) {  // (the last picture shown, kept whole as the picture the menu draws over: a GPU copy)
+        if (from_shown || !pf_valid) {
             GLint dfb = 0, rfb = 0;
             glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &dfb);
             glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
-            if (pic.fbo == 0 || pic.w != shown->w || pic.h != shown->h) pic.capture(shown->w, shown->h);  // (its set-up)
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, shown->fbo);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, pic.fbo);
-            glBlitFramebuffer(0, 0, shown->w, shown->h, 0, 0, shown->w, shown->h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            if (from_shown) {  // (the last picture shown, kept whole as the picture the menu draws over: a GPU copy)
+                if (pic.fbo == 0 || pic.w != shown->w || pic.h != shown->h) pic.capture(shown->w, shown->h);  // (its set-up)
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, shown->fbo);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, pic.fbo);
+                glBlitFramebuffer(0, 0, shown->w, shown->h, 0, 0, shown->w, shown->h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                for (int i = 0; i < 4; ++i) view[i] = shown_view[i];
+                menu_pic = true;
+            } else {
+                menu_pic = false;
+            }
+            if (!pf_valid) prefetch(from_shown ? *shown : pic, view[0], view[1], view[2], view[3]);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(dfb));
             glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(rfb));
-            for (int i = 0; i < 4; ++i) view[i] = shown_view[i];
-            menu_pic = true;
         } else {
             menu_pic = false;
         }
-        pending = false;
+        if (!pf_valid || w != pf_w || h != pf_h) return;
+        pending = false;  // (pf_valid kept: the store's next 16 KB blocks, 0x2a0f18's loop, read the same picture; the next frame shown ends it)
         LoadProf prof_all("the stored picture (libgraph's store)");
         // (the Scene frame is also the last frame shown: its read-back is the same picture)
         if (pf_fence != nullptr) glClientWaitSync(pf_fence, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ull);
@@ -822,7 +827,10 @@ struct ScenePicture {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         for (uint32_t& c : px) c = (c & 0x00ffffffu) | 0x80000000u;  // (the alpha the frame's pixels are drawn with, 0x80)
         rac1::gs::gs_global().write_ct32_rect(fbp * 32, fbw, static_cast<uint32_t>(w), static_cast<uint32_t>(h), px.data());
-        if (!from_shown) hash = hash_of(px.data(), px.size());  // (the Vendor's copy back drawn at the window's resolution: its own picture only)
+        if (!from_shown) {
+            hash = hash_of(px.data(), px.size());  // (the Vendor's copy back drawn at the window's resolution: its own picture only)
+            match_id = 0;
+        }
     }
     // the replica's frame after the game put a picture back (gs_draw's Viewport::screen_picture)
     void draw(const rac1::gs::TexImage& img, const rac1::gs::Viewport& vp) {
@@ -831,7 +839,8 @@ struct ScenePicture {
         int win[4] = {0, 0, 0, 0};
         glGetIntegerv(GL_VIEWPORT, win);
         const bool same_view = view[0] == vp.x && view[1] == vp.y && view[2] == vp.w && view[3] == vp.h;
-        if (hash != 0 && pic.fbo != 0 && same_view && hash_of(img.px.data(), img.px.size()) == hash) {  // the picture kept, at the window's resolution
+        if (hash != 0 && pic.fbo != 0 && same_view && (img.id == match_id || hash_of(img.px.data(), img.px.size()) == hash)) {  // the picture kept, at the window's resolution
+            match_id = img.id;
             glBindFramebuffer(GL_READ_FRAMEBUFFER, pic.fbo);
             glBlitFramebuffer(0, 0, pic.w, pic.h, 0, 0, pic.w, pic.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
         } else {  // the replica's frame over the frame's 4:3 area
@@ -2073,7 +2082,6 @@ int main(int argc, char** argv) {
         dt::dev_settings().show_stats = true;
     }
 #endif
-    FrozenFrame frozen;
     FrozenFrame displayed;  // the last picture drawn, the GS display buffer a blocking loop's frames draw over
     FrozenFrame last_shown;  // the last frame of the game drawn (not a menu's, a fade's, a movie's): the frame buffer a store reads
     bool displayed_is_last_shown = false;
@@ -2258,9 +2266,9 @@ int main(int argc, char** argv) {
             {  // the MRP skips what only the GS / VU1 path needs: asked
                // before the update, for a frame the MRP will draw (not the title, the level exit, a movie, the debug diffs)
                 int mw0 = 0, mh0 = 0;
-                // (not on the Vendor's screens, game mode 5: their frames over the stored picture are drawn by the GS path)
+                // (not on the Vendor's screens, game mode 5 once the picture is stored: their frames over it are drawn by the GS path)
                 g_moby_mrp_skip = s_mrp_skip_mode != 0 && mrp_moby_ready() && !boot_active() && !exiting && movie_hw_shown(mw0, mh0) == nullptr &&
-                                  lw(OV(0x0015f5c4)) != 5;
+                                  (lw(OV(0x0015f5c4)) != 5 || (lw(OV(0x001ca4c8)) == 0 && !ee_thread_suspended()));
                 g_moby_mrp_skip_verify = g_moby_mrp_skip && s_mrp_skip_mode == 2;
                 // the MRP's drop shadows: the shadow pass's data captured on a frame the MRP draws (whatever the skipping; the boot's title loop too)
                 mrp_shadows_begin_frame(mrp_moby_ready() && (!boot_active() || boot_in_title()) && !exiting && movie_hw_shown(mw0, mh0) == nullptr);
@@ -2479,7 +2487,7 @@ int main(int argc, char** argv) {
             fd.scene = ee_thread_suspended() && ee_thread_frame() == rac1::EeVsyncFrame::Scene;
             fd.fade = ee_thread_suspended() && !fd.scene;
             fd.fade_held = fd.fade && ee_thread_frame() == rac1::EeVsyncFrame::Held;
-            fd.vendor_pic = !fd.title && vendor_picture_frame();
+            fd.vendor_pic = !fd.title && !fd.scene && vendor_picture_frame();
             const bool fade = fd.fade;
             const bool menu_mode = fd.menu_mode, title = fd.title;
             const std::vector<uint8_t>* movie_pic = fd.movie_pic;
@@ -2877,7 +2885,7 @@ int main(int argc, char** argv) {
             const bool menu_mode = fd.menu_mode, title = fd.title, story = fd.story;
             const std::vector<uint8_t>* movie_pic = fd.movie_pic;
             const int mw = fd.mw, mh = fd.mh;
-            if (menu_mode || title || movie_pic != nullptr || fd.exiting) rac1::gs::chain_join();  // (those draws may use the GS replica)
+            if (menu_mode || fd.vendor_pic || title || movie_pic != nullptr || fd.exiting) rac1::gs::chain_join();  // (those draws may use the GS replica)
             glViewport(0, 0, w, h);
             glClearColor(0.02f, 0.02f, 0.04f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -2903,9 +2911,9 @@ int main(int argc, char** argv) {
             } else if (menu_mode && g_scene_pic.menu_pic && g_scene_pic.pic.w == w && g_scene_pic.pic.h == h) {
                 // the frame the menu's start stored (0x2a0f18), put back each frame by 0x2a0fc8: the picture shown then
                 g_scene_pic.pic.blit_to_screen();
-            } else if (menu_mode && frozen.fbo != 0 && frozen.w == w && frozen.h == h) {
-                frozen.blit_to_screen();
-            } else if (!menu_mode && (!fd.exiting || (fd.flight && g_world_mrp))) {  // (the level exit: the level left is not drawn; its loading screen's flight is)
+            } else if (menu_mode && last_shown.fbo != 0 && last_shown.w == w && last_shown.h == h) {
+                last_shown.blit_to_screen();
+            } else if (!menu_mode && !fd.vendor_pic && (!fd.exiting || (fd.flight && g_world_mrp))) {  // (the level exit: the level left is not drawn; its loading screen's flight is)
                 if (g_render_sky && !g_world_faithful && !g_world_mrp) sky_draw();  // (g_world_faithful: the sky comes from the frame's chain too, 0x23d968, g_world_mrp: the MRP draws it from that chain)
                 if (g_world_mrp) {  // the MRP world: the frame's chain decoded (above), the world drawn from its assets
                     rac1::gs::Viewport wv;
@@ -2937,10 +2945,9 @@ int main(int argc, char** argv) {
             // the mobys: the host's model drawer, or the original pass (g_moby_vu1_pass: debug menu,
             // RAC1_MOBY_VU1; ADR 0007) drawing through the GS; the exit's cards and movies draw no 3D
             // (the moby list left is not drawn)
-            if (g_render_moby && !g_moby_vu1_pass && movie_pic == nullptr && !story && !title && !fd.fade) orig_moby_draw();
+            if (g_render_moby && !g_moby_vu1_pass && movie_pic == nullptr && !story && !title && !fd.fade && !fd.vendor_pic) orig_moby_draw();
             fprof.mark(2);
             if (menu_cut) glDisable(GL_SCISSOR_TEST);
-            if (!menu_mode && !fd.fade && !g_scaled_scene.on) frozen.capture(w, h);  // (a scaled 3D: once it is on the window, below)
             fprof.mark(3);
             if (g_render_wireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             {
@@ -3007,7 +3014,6 @@ int main(int argc, char** argv) {
                 mrp_lighting_ao_pass();  // (the ambient occlusion over the 3D, before the effects and the 2D; nothing unless asked)
                 if (g_scaled_scene.on) {  // the scaled 3D on the window; the effects and the 2D drawn over it at the window's resolution
                     g_scaled_scene.end(w, h);
-                    if (!menu_mode && !fd.fade) frozen.capture(w, h);
                     glViewport(vx, vy, vw, vh);
                 }
                 static const bool s_moby_new = std::getenv("RAC1_MOBY_NEW_TRACE") != nullptr;  // (testing: the mobys that appear, and how they draw)
@@ -3054,12 +3060,12 @@ int main(int argc, char** argv) {
                 glViewport(0, 0, w, h);
                 fprof.mark(6);
             }
-            if (!menu_mode && !fd.fade && !title && movie_pic == nullptr && !fd.exiting) {
+            if (!menu_mode && !fd.fade && !fd.vendor_pic && !title && movie_pic == nullptr && !fd.exiting) {
                 // the last frame of the game shown: what the frame buffer holds when the pause menu's start stores it (the
                 // frame drawn when the menu opens is the gameplay chain drawn as a menu frame here: not that one)
                 last_shown.capture(w, h);
                 displayed_is_last_shown = true;
-                g_scene_pic.prefetch(last_shown, vx, vy, vw, vh);
+                g_scene_pic.pf_valid = false;
                 g_scene_pic.shown = &last_shown;
                 g_scene_pic.shown_view[0] = vx;
                 g_scene_pic.shown_view[1] = vy;
@@ -3069,7 +3075,10 @@ int main(int argc, char** argv) {
                 displayed.capture(w, h);  // (the picture shown: what a screen fade darkens)
                 displayed_is_last_shown = false;
             }
-            if (fd.scene) g_scene_pic.keep(w, h, vx, vy, vw, vh);  // (the picture the game stores after this frame)
+            if (fd.scene) {
+                g_scene_pic.keep(w, h, vx, vy, vw, vh);  // (the picture the game stores after this frame)
+                g_scene_pic.prefetch(g_scene_pic.pic, vx, vy, vw, vh);
+            }
 #ifdef RAC1_DEVTOOLS
             if (!headless || menu_shot) dt::dev_menu_draw(update_shown, frame_ms);
 #endif

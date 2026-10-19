@@ -500,7 +500,8 @@ beyond. It applies to the world and the mobys.
 ## Ambient occlusion
 
 Options > Graphics > Ambient Occlusion (`mrp_lighting_ao_pass`) is a screen-space ambient occlusion
-pass, run after the mobys and before the GS replica's effects, particles and 2D (so those get none):
+pass with five modes: SSAO (described below), SSAO+, HBAO, GTAO and GTAO at half resolution (the
+cheapest; at 5053x1371 on a Radeon 890M about 3.7, 4.0, 4.2, 5.2 and 3.3 ms of GPU). It runs after the mobys and before the GS replica's effects, particles and 2D (so those get none):
 
 1. The depth buffer is copied to a texture, at the 3D's own resolution (the render-scale buffer when
    scaling).
@@ -543,7 +544,7 @@ does not turn the lighting on.
 | Shadow Distance | Low, Medium, High, Maximum | Maximum | how far mobys cast sun shadows (40, 80, 140 units, or as far as the cascades reach) |
 | Dynamic Shadows | Off, On | Off | point-light cube shadows |
 | Secondary Lights | Off, Game's, All | All | Game's: the game's point lights per pixel; All: also automatic emitters and hand-placed lights |
-| Ambient Occlusion | Off, On | Off | SSAO |
+| Ambient Occlusion | Off, SSAO, SSAO+, HBAO, GTAO, GTAO 1/2 | Off | SSAO |
 
 The other rows take effect only when Lighting is not Original.
 
