@@ -43,6 +43,9 @@ struct Viewport {
     // screen (not the projected 3D, not a render target, not the 2D covering the frame's whole width or height: fades,
     // darkenings, the letterbox) is cut at these margins, in the game's frame pixels (left, right, top, bottom); 0: the full frame
     int crop[4] = {0, 0, 0, 0};
+    // (the modern view; off for the faithful reference) a font's glyph samples only the texels of its own cell: its bilinear
+    // filtering, scaled up, no longer blends in the texels beyond it, the neighbouring glyphs (issue #76; see draw())
+    bool sprite_clamp = false;
 };
 // The primitives over the current frame, the game's fb_w x fb_h frame onto the viewport
 // (`vp`, else the whole win_w x win_h); with `depth`, the Z-tested ones against the host's
