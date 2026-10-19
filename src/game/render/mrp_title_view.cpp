@@ -18,6 +18,7 @@ struct Window {
 std::array<Window, 2> g_win;
 std::array<std::array<uint8_t, 0x380>, 2> g_noted, g_game;
 bool g_have = false, g_in = false;
+bool g_menu = false;
 }  // namespace
 
 // orig: (host) see mrp_title_view.h
@@ -52,5 +53,10 @@ void mrp_title_view_swap_out() {
     g_in = false;
     g_have = false;
 }
+
+// orig: (host) see mrp_title_view.h
+void mrp_title_view_note_menu(bool menu) { g_menu = menu; }
+// orig: (host) see mrp_title_view.h
+bool mrp_title_menu_drawn() { return g_menu; }
 
 }  // namespace rac1

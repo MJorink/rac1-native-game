@@ -266,6 +266,12 @@ side bands are culled by the same shadow-run mechanism as the level of detail, w
 horizontally by the widescreen and the field of view, vertically by the field of view (the sky too).
 Before the vertical part, a Field of View above x1.00 lost the sky and the objects in bands at the
 top and bottom of the screen.
+The 3D that sits under the game's 2D keeps the game's own projection, so the two stay together at any
+field of view and shape (issue #68): the full-screen menus' mobys are drawn in the game's 4:3
+projection on the centred 4:3 frame; on the title's main menu only the menu's boxes are (the mobys the
+game draws from the menu's camera), the title scene and its own mobys keep the widened view; on the
+Vendor's screens (game mode 5), whose monitors are the scene's own mobys, the field of view is the
+game's (x1.00) while the widescreen still widens the 3D around the 4:3 frame.
 The levels' water, lava and sand-sea surfaces (Novalis's pond, Aridia's sand sea, Gaspar's lava, the
 water grids of Rilgar, Umbris and other levels) are drawn by draw-list callbacks that cull their tiles
 against the game's 4:3 clip matrix; those draw lists run as shadow blocks too, with that matrix

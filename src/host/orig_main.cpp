@@ -2429,6 +2429,10 @@ int main(int argc, char** argv) {
         struct FrameDraw {
             int w = 0, h = 0, vx = 0, vy = 0, vw = 0, vh = 0;
             bool menu_mode = false, title = false, story = false, exiting = false;
+            // the boot's title with its main menu (game mode 3, mrp_title_view.h): the menu's boxes (its mobys seen from the menu's
+            // camera) drawn by the MRP as the full-screen menu's mobys are - the game's own 4:3 projection, cut at its 4:3 frame -, the
+            // title scene's own mobys under them in the scene's widened view (mrp_moby_begin_frame)
+            bool title_menu = false;
             // the level exit's loading screen (game mode 6 step 4: the ship's flight, 0x2900a0): its 3D drawn by the MRP
             // from the flight's own assets (assets/generated/mrp/{moby,world}/flight/), as a level's
             bool flight = false;
@@ -2479,6 +2483,7 @@ int main(int argc, char** argv) {
             // the boot (its own image): the host's level data is not loaded (the title's scene draws
             // its mobys through the original pass; its ties, shrubs and sky: see title_scene_draw)
             fd.title = boot_active();
+            fd.title_menu = fd.title && mrp_title_menu_drawn();
             fd.exiting = exiting;
             fd.story = exiting && level_exit_in_story();
             fd.flight = exiting && level_exit_loading_screen();
@@ -2501,7 +2506,7 @@ int main(int argc, char** argv) {
                 moby_gpu_begin_frame();
                 // the MRP: the level's assets, whether it draws this frame's mobys (not the boot's
                 // title before its loop (its scene's mobys are the MRP's), the level exit's loops, a movie: those keep the faithful pass)
-                mrp_moby_begin_frame((title && !boot_in_title() && !fd.flight) || (exiting && !fd.flight) || movie_pic != nullptr || fade || fd.vendor_pic, menu_mode);
+                mrp_moby_begin_frame((title && !boot_in_title() && !fd.flight) || (exiting && !fd.flight) || movie_pic != nullptr || fade || fd.vendor_pic, menu_mode, fd.title_menu);
                 const uint32_t idx = lwu(OV(0x001611d0));
                 uint32_t start = lwu(OV(0x001611b8) + (idx & 1) * 4), end = lwu(OV(0x001611c0));
                 // a loop that kicks its frame's chain (0x2a08c8, not ported) before it flips the buffers

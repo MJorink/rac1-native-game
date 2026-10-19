@@ -52,8 +52,11 @@ bool mrp_moby_ready();
 // orig: (host) the world renderers' view-projection (column-major, 16 floats): what the MRP draws the mobys and the shadows with
 void mrp_world_view_proj(float out[16]);
 // orig: (host) per host frame, before the GS chain: the level's assets (re)loaded when the level
-// changed, the frame's activity decided (`title`: the boot's title scene, drawn by the faithful pass)
-void mrp_moby_begin_frame(bool title, bool menu_mode);
+// changed, the frame's activity decided (`title`: the boot's title scene, drawn by the faithful pass; `menu_mode`: the full-screen
+// menu's frame, every moby in the game's own 4:3 projection; `title_menu`: the boot's title main menu, the mobys the game drew from
+// another camera than the scene's (MrpMoby::other_view: the menu's boxes) in the game's own 4:3 projection cut at its 4:3 frame,
+// the scene's mobys in the world's)
+void mrp_moby_begin_frame(bool title, bool menu_mode, bool title_menu = false);
 // orig: (host) draws the scene's mobys (mrp_scene()) into the bound framebuffer, viewport `vp`
 // orig: (host) the frame's draw lists built and uploaded now (from the scene and the game's state), for a frame drawn after
 // the next update (mrp_moby_draw then only draws)
