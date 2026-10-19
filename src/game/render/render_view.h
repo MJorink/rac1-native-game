@@ -23,9 +23,9 @@ float render_proj_x(float aspect, float fov);
 // The window rectangle the frame is drawn in (bottom-left origin) and the horizontal widening of
 // the 3D (> 1 wider than 4:3) for the view mode g_view_mode; set each frame by the host.
 void render_view_rect(int win_w, int win_h, int& x, int& y, int& w, int& h);
-// the margins (left, right, top, bottom, in the game's frame pixels, fb_w x fb_h) the frame's 2D is cut at: the
-// overscan a TV hid with g_view_overscan_crop, else none (the full frame). RAC1_OVERSCAN (testing): 0 none, 1 the TV's,
-// "l,r,t,b" those margins; it wins over the setting.
+// the margins (left, right, top, bottom, in the game's frame pixels, fb_w x fb_h) the frame's 2D is cut at: none (the
+// full frame, always shown since the Graphics page's Overscan row was removed). RAC1_OVERSCAN (testing): 0 none, 1 the
+// overscan a TV hid, "l,r,t,b" those margins.
 void render_overscan_crop(float fb_w, float fb_h, int crop[4]);
 extern float g_view_widen;
 // The field of view scale (debug menu, 1 the game's).

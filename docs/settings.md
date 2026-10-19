@@ -36,7 +36,6 @@ and behave like the game's own pages. Left and right change a row's value; Cross
 | Render Resolution | x0.50 to x2.00 of the window's, in steps of 0.25 | x1.00 |
 | Aspect Ratio | 4:3 Original, 16:9, Fill Screen | 4:3 Original |
 | Fit to Screen | Black Bars, Stretch | Black Bars |
-| Overscan | TV, Full Frame | TV |
 | Field of View | x0.75 to x1.50 of the original's | x1.00 |
 | Level of Detail | Original, Low, Medium, High, Maximum | Original |
 | Lighting | Original, Low, Medium, High | Original |
@@ -56,10 +55,12 @@ and behave like the game's own pages. Left and right change a row's value; Cross
 - **Aspect Ratio** Fill Screen widens the 3D to the window's shape without changing what the game
   sees; **Fit to Screen** applies when the chosen shape is not the window's. See
   [Rendering](rendering.md#widescreen-and-render-scale).
-- **Overscan** TV hides a thin strip (4 of the game's 512 x 416 frame pixels) at the left, right and
-  top edges, the part of the picture a TV of the time did not show; the game parks some 2D there that
-  was never meant to be seen. The crop applies to the 2D layer only (HUD, menus, texts), never to the
-  3D. Full Frame shows everything the PS2 drew. Headless runs always keep the full frame.
+- **The full frame** is always shown, everything the PS2 drew, edges included. Until 0.4 an Overscan
+  row (TV, the default, or Full Frame) could hide a thin strip at the left, right and top edges, as a
+  TV of the time did; the row was removed. The one thing the game itself draws there that a TV hid, a
+  thin strip of a HUD element as it slides away (the Suck Cannon's gauge, the air meter), is not drawn
+  (see [Rendering](rendering.md)). The `overscan` key of older preferences and the Overscan item of
+  older saves are read and ignored.
 - **Level of Detail** draws more detail further away, without changing the game's own decisions. See
   [Rendering](rendering.md#level-of-detail).
 - **Lighting and the four rows after it** are the optional modern lighting; the last four only act
@@ -167,7 +168,7 @@ to other files.
 
 The window's own settings (display mode, window size, v-sync, frame-rate cap) belong to the machine
 and are kept only in the preferences. The picture settings (render resolution, aspect ratio, fit,
-field of view, level of detail, the lighting rows, texture detail, overscan) and the Advanced settings are also written into
+field of view, level of detail, the lighting rows, texture detail) and the Advanced settings are also written into
 each save's `save<N>.pc`, so loading a save brings back the settings it was played with. A save
 without that file (an older one) keeps the current settings.
 

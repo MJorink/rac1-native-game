@@ -52,9 +52,6 @@ extern int g_view_mode;
 // wider (16:9: the 3D widened to it, the HUD kept 4:3 at its centre), stretched to the window (0)
 // or with bars (1).
 extern float g_view_frame_aspect;
-// (Options > Graphics > Overscan) the frame's 2D cut to the area a TV showed (1: the default for the player) or the
-// whole frame the GS output (0: the reference; the default of the tests, which do not read the player's settings)
-extern int g_view_overscan_crop;
 
 } // namespace rac1
 

@@ -92,7 +92,7 @@ constexpr uint32_t PICTURE_SECTOR = 0xadf00000u;
 enum : uint32_t { PIC_ORIGINAL = 2, PIC_MODERN = 3, PIC_EXPERIMENTAL = 5 };  // (advanced.cpp's PIC_ ids)
 
 // The settings
-enum Setting : uint32_t { S_DISPLAY, S_MONITOR, S_WINDOW, S_SCALE, S_ASPECT, S_FIT, S_LOD, S_FOV, S_VSYNC, S_CAP, S_LIGHTING, S_DYN_SHADOWS, S_SEC_LIGHTS, S_SHADOW_DIST, S_AO, S_MIPS, S_OVERSCAN, S_COUNT };
+enum Setting : uint32_t { S_DISPLAY, S_MONITOR, S_WINDOW, S_SCALE, S_ASPECT, S_FIT, S_LOD, S_FOV, S_VSYNC, S_CAP, S_LIGHTING, S_DYN_SHADOWS, S_SEC_LIGHTS, S_SHADOW_DIST, S_AO, S_MIPS, S_COUNT };
 constexpr float SHADOW_DISTS[] = {40.0f, 80.0f, 140.0f, 0.0f};  // Low, Medium, High, Maximum (0: as far as the cascades reach)
 constexpr int SCALES[] = {50, 75, 100, 125, 150, 175, 200};
 constexpr int FOVS[] = {75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 130, 140, 150};
@@ -109,17 +109,17 @@ constexpr uint32_t SIZE_COUNT = sizeof(SIZES) / sizeof(Size);
 constexpr int32_t TEXT_FIRST = 0x7f40;
 enum : int32_t {
     T_GRAPHICS, T_OPTIONS_HELP,
-    T_DISPLAY, T_MONITOR, T_WINDOW_SIZE, T_SCALE, T_ASPECT, T_FIT, T_LOD, T_FOV, T_VSYNC, T_CAP, T_LIGHTING, T_DYN_SHADOWS, T_SEC_LIGHTS, T_SHADOW_DIST, T_AO, T_MIPS, T_OVERSCAN,
-    H_DISPLAY, H_MONITOR, H_WINDOW_SIZE, H_SCALE, H_ASPECT, H_FIT, H_LOD, H_FOV, H_VSYNC, H_CAP, H_LIGHTING, H_DYN_SHADOWS, H_SEC_LIGHTS, H_SHADOW_DIST, H_AO, H_MIPS, H_OVERSCAN,
+    T_DISPLAY, T_MONITOR, T_WINDOW_SIZE, T_SCALE, T_ASPECT, T_FIT, T_LOD, T_FOV, T_VSYNC, T_CAP, T_LIGHTING, T_DYN_SHADOWS, T_SEC_LIGHTS, T_SHADOW_DIST, T_AO, T_MIPS,
+    H_DISPLAY, H_MONITOR, H_WINDOW_SIZE, H_SCALE, H_ASPECT, H_FIT, H_LOD, H_FOV, H_VSYNC, H_CAP, H_LIGHTING, H_DYN_SHADOWS, H_SEC_LIGHTS, H_SHADOW_DIST, H_AO, H_MIPS,
     T_WINDOW, T_FULLSCREEN, T_43, T_169, T_FILL, T_BARS, T_STRETCH,
-    T_ORIGINAL, T_LOW, T_MEDIUM, T_HIGH, T_MAXIMUM, T_OFF, T_ON, T_UNLIMITED, T_SEC_GAME, T_SEC_ALL, T_FULL, T_TV, T_FULL_FRAME,
+    T_ORIGINAL, T_LOW, T_MEDIUM, T_HIGH, T_MAXIMUM, T_OFF, T_ON, T_UNLIMITED, T_SEC_GAME, T_SEC_ALL, T_FULL,
     T_MODE_ORIGINAL, T_MODE_MODERN, T_MODE_EXPERIMENTAL, H_MODE_ORIGINAL, H_MODE_MODERN, H_MODE_EXPERIMENTAL,
     T_COUNT,
     V_FIRST = T_COUNT  // the shown rows' value texts (made from the values): V_FIRST + slot
 };
 constexpr const char* TEXTS[4][T_COUNT] = {
     {"Graphics", "Display, picture shape, detail and view of the PC version",
-     "Display", "Monitor", "Window Size", "Render Resolution", "Aspect Ratio", "Fit to Screen", "Level of Detail", "Field of View", "V-Sync", "Frame Rate Cap", "Lighting", "Dynamic Shadows", "Secondary Lights", "Shadow Distance", "Ambient Occlusion", "Texture Detail", "Overscan",
+     "Display", "Monitor", "Window Size", "Render Resolution", "Aspect Ratio", "Fit to Screen", "Level of Detail", "Field of View", "V-Sync", "Frame Rate Cap", "Lighting", "Dynamic Shadows", "Secondary Lights", "Shadow Distance", "Ambient Occlusion", "Texture Detail",
      "In a window or on the whole screen.", "Which screen the window is put on.", "The window's size (in window mode).", "The 3D's resolution, times the screen's. The HUD stays sharp.",
      "4:3 as the original, 16:9, or the view widened to fill the screen.", "When the picture's shape is not the screen's: black bars, or stretched.",
      "How far objects keep their detail and stay drawn.", "x1.00 is the original's view.", "Waits for the screen's refresh: no tearing.",
@@ -130,15 +130,14 @@ constexpr const char* TEXTS[4][T_COUNT] = {
      "How far characters and objects cast shadows.",
      "Soft darkening where surfaces meet. Costs more.",
      "Full: every texture level, smooth. Original (PS2): the GS's own mip choice.",
-     "TV: the HUD's edges hidden as a TV did. Full Frame: all the PS2 drew.",
      "Window", "Fullscreen", "4:3 Original", "16:9", "Fill Screen", "Black Bars", "Stretch",
-     "Original", "Low", "Medium", "High", "Maximum", "Off", "On", "Unlimited", "Game's", "All", "Full", "TV", "Full Frame",
+     "Original", "Low", "Medium", "High", "Maximum", "Off", "On", "Unlimited", "Game's", "All", "Full",
      "Original", "Modern", "Experimental",
      "As on the PS2: 4:3, original detail and controls. All can be changed in Options.",
      "Widescreen, more detail, modern aiming and movement. All can be changed in Options.",
      "Modern plus all the new lighting: shadows, lights, occlusion. Experimental, heavy."},
     {"Grafik", "Anzeige, Bildformat, Details und Sicht der PC-Version",
-     "Anzeige", "Bildschirm", "Fenstergrosse", "Renderauflosung", "Seitenverhaltnis", "Bildanpassung", "Detailstufe", "Sichtfeld", "V-Sync", "Bildratenlimit", "Beleuchtung", "Dynamische Schatten", "Zusatzlichter", "Schattendistanz", "Umgebungsverdeckung", "Texturdetail", "Overscan",
+     "Anzeige", "Bildschirm", "Fenstergrosse", "Renderauflosung", "Seitenverhaltnis", "Bildanpassung", "Detailstufe", "Sichtfeld", "V-Sync", "Bildratenlimit", "Beleuchtung", "Dynamische Schatten", "Zusatzlichter", "Schattendistanz", "Umgebungsverdeckung", "Texturdetail",
      "Im Fenster oder im Vollbild.", "Auf welchem Bildschirm das Fenster liegt.", "Die Grosse des Fensters (im Fenstermodus).", "Die Auflosung der 3D-Grafik, mal die des Bildschirms. Das HUD bleibt scharf.",
      "4:3 wie im Original, 16:9 oder auf den Bildschirm erweitert.", "Wenn das Bildformat nicht passt: schwarze Balken oder gestreckt.",
      "Wie weit Objekte ihre Details behalten und gezeichnet werden.", "x1.00 ist die Sicht des Originals.", "Wartet auf den Bildaufbau: kein Tearing.",
@@ -149,15 +148,14 @@ constexpr const char* TEXTS[4][T_COUNT] = {
      "Wie weit Figuren und Objekte Schatten werfen.",
      "Weiche Abdunklung, wo Flachen sich treffen. Aufwendiger.",
      "Voll: alle Texturstufen, weich. Original (PS2): die Mip-Wahl der GS.",
-     "TV: die HUD-Rander verdeckt wie am Fernseher. Ganzes Bild: alles der PS2.",
      "Fenster", "Vollbild", "4:3 Original", "16:9", "Fullen", "Balken", "Strecken",
-     "Original", "Niedrig", "Mittel", "Hoch", "Maximum", "Aus", "An", "Unbegrenzt", "Des Spiels", "Alle", "Voll", "TV", "Ganzes Bild",
+     "Original", "Niedrig", "Mittel", "Hoch", "Maximum", "Aus", "An", "Unbegrenzt", "Des Spiels", "Alle", "Voll",
      "Original", "Modern", "Experimentell",
      "Wie auf der PS2: 4:3, Original-Details und -Steuerung. Alles in Optionen anderbar.",
      "Breitbild, mehr Details, modernes Zielen und Bewegen. Alles in Optionen anderbar.",
      "Modern plus die neue Beleuchtung: Schatten, Lichter, Verdeckung. Experimentell, aufwendig."},
     {"Graficos", "Pantalla, formato, detalle y vista de la version PC",
-     "Pantalla", "Monitor", "Tamano de ventana", "Resolucion 3D", "Relacion de aspecto", "Ajuste", "Nivel de detalle", "Campo de vision", "V-Sync", "Limite de FPS", "Iluminacion", "Sombras dinamicas", "Luces secundarias", "Distancia de sombras", "Oclusion ambiental", "Detalle de texturas", "Overscan",
+     "Pantalla", "Monitor", "Tamano de ventana", "Resolucion 3D", "Relacion de aspecto", "Ajuste", "Nivel de detalle", "Campo de vision", "V-Sync", "Limite de FPS", "Iluminacion", "Sombras dinamicas", "Luces secundarias", "Distancia de sombras", "Oclusion ambiental", "Detalle de texturas",
      "En una ventana o a pantalla completa.", "En que pantalla se abre la ventana.", "El tamano de la ventana (en modo ventana).", "La resolucion del 3D, por la de la pantalla. El HUD sigue nitido.",
      "4:3 como el original, 16:9 o la vista ampliada a la pantalla.", "Si el formato no es el de la pantalla: bandas negras o estirado.",
      "Hasta donde los objetos conservan su detalle y se dibujan.", "x1.00 es la vista del original.", "Espera al refresco de la pantalla: sin cortes.",
@@ -168,15 +166,14 @@ constexpr const char* TEXTS[4][T_COUNT] = {
      "Hasta donde personajes y objetos dan sombra.",
      "Sombreado suave donde las superficies se juntan. Mas pesado.",
      "Completo: todos los niveles, suave. Original (PS2): el mip de la GS.",
-     "TV: bordes del HUD ocultos como en un televisor. Imagen completa: todo.",
      "Ventana", "Completa", "4:3 Original", "16:9", "Llenar", "Bandas", "Estirar",
-     "Original", "Bajo", "Medio", "Alto", "Maximo", "No", "Si", "Sin limite", "Del juego", "Todas", "Completo", "TV", "Imagen completa",
+     "Original", "Bajo", "Medio", "Alto", "Maximo", "No", "Si", "Sin limite", "Del juego", "Todas", "Completo",
      "Original", "Moderno", "Experimental",
      "Como en PS2: 4:3, detalle y controles originales. Todo cambia en Opciones.",
      "Panoramico, mas detalle, apuntado y movimiento modernos. Todo cambia en Opciones.",
      "Moderno y la nueva iluminacion al maximo: sombras, luces, oclusion. Experimental, pesado."},
     {"Grafica", "Schermo, formato, dettaglio e visuale della versione PC",
-     "Schermo", "Monitor", "Finestra", "Risoluzione 3D", "Formato", "Adattamento", "Livello di dettaglio", "Campo visivo", "V-Sync", "Limite FPS", "Illuminazione", "Ombre dinamiche", "Luci secondarie", "Distanza ombre", "Occlusione ambientale", "Dettaglio texture", "Overscan",
+     "Schermo", "Monitor", "Finestra", "Risoluzione 3D", "Formato", "Adattamento", "Livello di dettaglio", "Campo visivo", "V-Sync", "Limite FPS", "Illuminazione", "Ombre dinamiche", "Luci secondarie", "Distanza ombre", "Occlusione ambientale", "Dettaglio texture",
      "In una finestra o a schermo intero.", "Su quale schermo va la finestra.", "La dimensione della finestra (in modalita finestra).", "La risoluzione del 3D, per quella dello schermo. L'HUD resta nitido.",
      "4:3 come l'originale, 16:9 o la visuale allargata allo schermo.", "Se il formato non e quello dello schermo: bande nere o stirato.",
      "Fin dove gli oggetti tengono il dettaglio e restano disegnati.", "x1.00 e la visuale dell'originale.", "Attende il refresh dello schermo: niente tearing.",
@@ -187,9 +184,8 @@ constexpr const char* TEXTS[4][T_COUNT] = {
      "Fin dove personaggi e oggetti fanno ombra.",
      "Ombreggiatura morbida dove le superfici si toccano. Piu pesante.",
      "Pieno: tutti i livelli, morbido. Originale (PS2): il mip della GS.",
-     "TV: bordi dell'HUD nascosti come su un televisore. Immagine intera: tutto.",
      "Finestra", "Intero", "4:3 Originale", "16:9", "Riempi", "Bande nere", "Stira",
-     "Originale", "Basso", "Medio", "Alto", "Massimo", "No", "Si", "Illimitato", "Del gioco", "Tutte", "Pieno", "TV", "Immagine intera",
+     "Originale", "Basso", "Medio", "Alto", "Massimo", "No", "Si", "Illimitato", "Del gioco", "Tutte", "Pieno",
      "Originale", "Moderno", "Sperimentale",
      "Come su PS2: 4:3, dettaglio e controlli originali. Tutto si cambia in Opzioni.",
      "Panoramico, piu dettaglio, mira e movimento moderni. Tutto si cambia in Opzioni.",
@@ -205,7 +201,7 @@ struct Row {
 constexpr Row ROWS_DEF[] = {
     {S_DISPLAY, T_DISPLAY, H_DISPLAY},       {S_MONITOR, T_MONITOR, H_MONITOR},                {S_WINDOW, T_WINDOW_SIZE, H_WINDOW_SIZE},          {S_VSYNC, T_VSYNC, H_VSYNC},
     {S_CAP, T_CAP, H_CAP},                   {S_SCALE, T_SCALE, H_SCALE},                       {S_ASPECT, T_ASPECT, H_ASPECT},
-    {S_FIT, T_FIT, H_FIT},                   {S_OVERSCAN, T_OVERSCAN, H_OVERSCAN},    {S_FOV, T_FOV, H_FOV},                             {S_LOD, T_LOD, H_LOD},
+    {S_FIT, T_FIT, H_FIT},                   {S_FOV, T_FOV, H_FOV},                             {S_LOD, T_LOD, H_LOD},
     {S_LIGHTING, T_LIGHTING, H_LIGHTING},    {S_SHADOW_DIST, T_SHADOW_DIST, H_SHADOW_DIST},     {S_DYN_SHADOWS, T_DYN_SHADOWS, H_DYN_SHADOWS},
     {S_SEC_LIGHTS, T_SEC_LIGHTS, H_SEC_LIGHTS},   {S_AO, T_AO, H_AO},
     {S_MIPS, T_MIPS, H_MIPS},
@@ -217,7 +213,7 @@ static_assert(0x1000 + (T_COUNT + VISIBLE) * STRING_SIZE <= 0x4000, "the Graphic
 // The state the host reads (C++ side: the window is not the game's)
 struct State {
     // (the defaults: window, 100 %, 4:3 with bars, original LOD, 100 %, v-sync, 60, original lighting, no dynamic shadows, all secondary lights)
-    int value[S_COUNT] = {0, 0, 0, 2, 0, 0, 0, 5, 1, 1, 0, 0, 2, 3, 0, 0, 0};  // (the monitor: the first of the host's list; shadow distance: Maximum; no ambient occlusion; full textures; the TV's area)
+    int value[S_COUNT] = {0, 0, 0, 2, 0, 0, 0, 5, 1, 1, 0, 0, 2, 3, 0, 0};  // (the monitor: the first of the host's list; shadow distance: Maximum; no ambient occlusion; full textures)
     std::vector<std::string> monitors;  // the host's monitors as it named them (graphics_set_monitors), GLFW's order
     std::string monitor_name;           // the monitor chosen, by name: what the preferences keep (the order is not stable)
     int top = 0, prev_sel = 0;  // the page's window: the first row shown; the selection the last frame
@@ -234,7 +230,7 @@ struct State {
 // orig: (none) — enhancement: the number of values of a setting
 uint32_t value_count(Setting s) {
     switch (s) {
-        case S_DISPLAY: case S_FIT: case S_VSYNC: case S_DYN_SHADOWS: case S_MIPS: case S_OVERSCAN: return 2;
+        case S_DISPLAY: case S_FIT: case S_VSYNC: case S_DYN_SHADOWS: case S_MIPS: return 2;
         case S_AO: return 6;  // Off, SSAO, SSAO+, HBAO, GTAO, GTAO 1/2
         case S_SEC_LIGHTS: return 3;
         case S_SHADOW_DIST: return 4;  // Off, the game's (its point lights per pixel), all (the automatic emitters too)
@@ -286,7 +282,6 @@ void apply() {
         if (std::getenv("RAC1_AUTO_LIGHTS") == nullptr) g_auto_lights = v[S_SEC_LIGHTS] == 2 ? 1 : 0;
         if (std::getenv("RAC1_SHADOW_MOBY_DIST") == nullptr) g_shadow_moby_dist = SHADOW_DISTS[v[S_SHADOW_DIST]];
         if (std::getenv("RAC1_AO") == nullptr) g_ao = v[S_AO];
-        g_view_overscan_crop = v[S_OVERSCAN] == 0 ? 1 : 0;  // (the TV's area, or the full frame; RAC1_OVERSCAN wins, render_view.cpp)
         mips_apply();
     }
     GraphicsDisplay d;
@@ -365,7 +360,7 @@ bool prefs_read(const std::filesystem::path& path) {
         else if (std::strcmp(key, "shadow_distance") == 0 && a >= 0 && a < 4) gs_.value[S_SHADOW_DIST] = a;
         else if (std::strcmp(key, "ambient_occlusion") == 0 && a >= 0 && a < 6) gs_.value[S_AO] = a;
         else if (std::strcmp(key, "texture_detail") == 0) gs_.value[S_MIPS] = a != 0;  // (0 full, 1 original)
-        else if (std::strcmp(key, "overscan") == 0) gs_.value[S_OVERSCAN] = a != 0;  // (0 the TV's area, 1 the full frame)
+        // ("overscan", the Overscan row's until 0.4: read like any other key and ignored, the full frame always shown)
         else if (std::strcmp(key, "mode") == 0 && a >= 0 && a <= 3) gs_.mode = static_cast<uint32_t>(a);
     }
     std::fclose(f);
@@ -410,9 +405,9 @@ void prefs_write() {
     if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path(), ec);
     if (FILE* f = platform::open_file(path, "w")) {
         const int* v = gs_.value;
-        std::fprintf(f, "display %d\nmonitor %s\nwindow %d %d\nrender_scale %d\naspect %d\nfit %d\nlod %d\nfov %d\nvsync %d\nfps_cap %d\nlighting %d\ndynamic_shadows %d\nsecondary_lights %d\nshadow_distance %d\nambient_occlusion %d\ntexture_detail %d\noverscan %d\nmode %u\n",
+        std::fprintf(f, "display %d\nmonitor %s\nwindow %d %d\nrender_scale %d\naspect %d\nfit %d\nlod %d\nfov %d\nvsync %d\nfps_cap %d\nlighting %d\ndynamic_shadows %d\nsecondary_lights %d\nshadow_distance %d\nambient_occlusion %d\ntexture_detail %d\nmode %u\n",
                      v[S_DISPLAY], gs_.monitor_name.c_str(), gs_.win_w, gs_.win_h, SCALES[v[S_SCALE]], v[S_ASPECT], v[S_FIT], v[S_LOD], FOVS[v[S_FOV]], v[S_VSYNC], CAPS[v[S_CAP]], v[S_LIGHTING], v[S_DYN_SHADOWS],
-                     v[S_SEC_LIGHTS], v[S_SHADOW_DIST], v[S_AO], v[S_MIPS], v[S_OVERSCAN], gs_.mode);
+                     v[S_SEC_LIGHTS], v[S_SHADOW_DIST], v[S_AO], v[S_MIPS], gs_.mode);
         std::fclose(f);
     }
     gs_.dirty = false;
@@ -460,7 +455,6 @@ std::string value_text(Setting s) {
             return v <= 0 ? t[T_OFF] : AO_NAMES[std::min(v, 5) - 1];
         }
         case S_MIPS: return v != 0 ? std::string(t[T_ORIGINAL]) + " (PS2)" : std::string(t[T_FULL]);
-        case S_OVERSCAN: return t[v != 0 ? T_FULL_FRAME : T_TV];
         case S_FOV: std::snprintf(b, sizeof b, "x%d.%02d", FOVS[v] / 100, FOVS[v] % 100); return b;
         case S_VSYNC: return t[v != 0 ? T_ON : T_OFF];
         case S_CAP:
@@ -728,7 +722,7 @@ void graphics_save_items(std::vector<uint8_t>& d, uint32_t& count) {
     const struct { uint16_t id; int value; } items[] = {
         {32, gs_.value[S_SCALE]}, {33, gs_.value[S_ASPECT]}, {34, gs_.value[S_FIT]}, {35, gs_.value[S_LOD]}, {36, gs_.value[S_FOV]}, {37, static_cast<int>(gs_.mode)},
         {38, gs_.value[S_LIGHTING]}, {39, gs_.value[S_DYN_SHADOWS]}, {40, gs_.value[S_SEC_LIGHTS]},
-        {41, gs_.value[S_SHADOW_DIST]}, {42, gs_.value[S_AO]}, {43, gs_.value[S_MIPS]}, {44, gs_.value[S_OVERSCAN]},
+        {41, gs_.value[S_SHADOW_DIST]}, {42, gs_.value[S_AO]}, {43, gs_.value[S_MIPS]},
     };
     for (const auto& it : items) {
         d.push_back(static_cast<uint8_t>(it.id));
@@ -758,7 +752,7 @@ bool graphics_save_item(uint32_t id, const uint8_t* data, uint32_t size) {
         case 41: if (v < 4) gs_.value[S_SHADOW_DIST] = v; break;
         case 42: if (v < 6) gs_.value[S_AO] = v; break;
         case 43: if (v < 2) gs_.value[S_MIPS] = v; break;
-        case 44: if (v < 2) gs_.value[S_OVERSCAN] = v; break;
+        case 44: return true;  // (the Overscan row's until 0.4: ignored, the full frame always shown)
         default: break;
     }
     changed();
