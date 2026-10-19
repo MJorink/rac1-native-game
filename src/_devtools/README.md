@@ -25,7 +25,12 @@ support development:
 
 - **Lights** (tab): the modern lighting's lights placed by hand and the automatic emitters' classes
   turned off, per level, saved in `data/lights/levelNN.txt` (see
-  [Lighting: the light editor](../../docs/lighting.md#the-light-editor)).
+  [Lighting: the light editor](../../docs/lighting.md#the-light-editor)). Its "Lights per object class" part picks the object
+  under a crosshair (the depth there: a tie instance's box, the nearest moby) and makes every instance of its class emit
+  (`emit` lines; see [Lighting: lights per object class](../../docs/lighting.md#lights-per-object-class)).
 - **Sun** (tab): the level's own sun direction (azimuth and elevation, or the game's key light),
   applied at once while playing; Save writes the `sun` line into the same level file, keeping its
   comments and lights (see [Lighting: the sun editor](../../docs/lighting.md#the-sun-editor)).
+- **Sun** (tab), interiors: the level's `interior` boxes (the camera inside: the sun off, the original's look) drawn over the
+  picture, added around the camera, edited, deleted; `interior_set` light sets (the hero lit with one); saved with the level file
+  (see [Lighting: interiors](../../docs/lighting.md#interiors)).

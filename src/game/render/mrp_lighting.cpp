@@ -37,7 +37,7 @@ int env_int(const char* name, int def) {
 
 int g_modern_shadows = env_int("RAC1_SHADOWS", 0);
 int g_shadow_quality = std::clamp(env_int("RAC1_SHADOW_RES", 1), 0, 2);
-int g_shadow_strength = std::clamp(env_int("RAC1_SHADOW_STRENGTH", 55), 0, 100);
+int g_shadow_strength = std::clamp(env_int("RAC1_SHADOW_STRENGTH", 70), 0, 100);
 int g_shadow_debug = env_int("RAC1_SHADOW_DEBUG", 0);
 int g_modern_points = env_int("RAC1_POINTS", 1);
 int g_point_shadows = env_int("RAC1_POINT_SHADOWS", 0);
@@ -71,10 +71,25 @@ struct SunFile {
     float az = 0.0f, el = 45.0f;
 } g_sun_file;
 bool g_sun_snap = false;  // (the editor changed it: the sun turned at once, not a degree a frame)
+// the level's interiors (our data: "interior x0 y0 z0 x1 y1 z1" boxes and "interior_set <n>" light sets in its file): where the
+// camera is in one (or the hero is lit with that set), the sun is off - the original's look -, faded over kInteriorFade frames
+std::vector<SunInterior> g_interiors;
+std::vector<int> g_interior_sets;
+constexpr float kInteriorFade = 18.0f;  // (about 0.3 s)
+float g_interior_k = 0.0f;              // 0 outdoors .. 1 inside (faded)
+int g_interior_hero_set = -1;           // (the hero's light set, the debug menu's)
 void user_ensure();  // (the level's file read, once per level: below)
+void screen_point_read(const int vp[4]);  // (the debug menu's crosshair: below)
+void lamp_scan(const int vp[4]);          // (testing, RAC1_LAMP_SCAN: below)
 std::atomic<bool> g_has_sun{true};  // the level's key light comes from above: the sun's shadows (else none: Blarg)
 // how much of the sun's weight the view keeps: 0 covered from the sun .. 1 open (see kProbeW)
 float view_open();
+// orig: (host) the covered views' probe: off (the level's interiors decide where the sun is off - a short covered passage
+// faded the sun out and it came back slowly); RAC1_SUN_COVER=1 turns it on, for testing
+bool cover_probe_on() {
+    static const bool on = env_int("RAC1_SUN_COVER", 0) != 0;
+    return on;
+}
 std::atomic<bool> g_casc_on{true};  // the cascades drawn: the zone has a sun (its shadows' weight may be faded to 0: the view covered)
 float g_cull_sun[3] = {0.0f, 0.0f, 1.0f};  // (the sun for the casters' search on the scene's worker)
 float g_cull_tan[2] = {0.0f, 0.0f};         // (the drawn view's half-angle tangents, 1 / P00 and 1 / P11)
@@ -99,7 +114,7 @@ struct State {
     glm::vec3 key_dir{0.0f, 0.0f, 1.0f};  // toward the key light as the game lights with it (the sun's direction unless the level's file turns it)
     int npts = 0;                     // the frame's active point lights: position, radius; colour
     glm::vec4 pt_pos[kMaxPts], pt_col[kMaxPts];  // (pt_col.w: the light's cube in the shadow array, -1 none)
-    int pt_slot[kMaxPts] = {};                   // (the game's slot of each: its casters' view, 3 + slot; -1 an automatic emitter)
+    int pt_slot[kMaxPts] = {};                   // (the game's slot of each: its casters' view, 3 + slot; -1 an automatic emitter; -2 a moby class's lamp: no shadow cube)
     uint64_t frame = 0;              // the far cascade's turn
     // the static world's cache per cascade: the cascade's box held still while the view's slice stays inside it (its
     // sphere, kCacheGrow times the slice's), the world's casters drawn into `stex` only when it moves; each frame that map is copied
@@ -411,7 +426,25 @@ void fit_cascades() {
         glm::vec3 tkey_dir(0.0f, 0.0f, 1.0f);
         const glm::vec3 target = sun_direction(&tw, &tkey, &tkey_dir);
         const float zone_w = tw;
-        tw *= view_open();  // (a view covered from the sun: its shadows faded out, the cascades still drawn - the probe's)
+        tw *= view_open();  // (testing, RAC1_SUN_COVER=1: a view covered from the sun - its shadows faded out, the cascades still drawn)
+        {  // the level's interiors: the camera in one of its boxes, or the hero lit with one of its light sets
+            user_ensure();
+            bool inside = false;
+            for (const SunInterior& b : g_interiors)
+                inside = inside || (g_sh.cam.x >= b.lo[0] && g_sh.cam.y >= b.lo[1] && g_sh.cam.z >= b.lo[2] && g_sh.cam.x <= b.hi[0] && g_sh.cam.y <= b.hi[1] &&
+                                    g_sh.cam.z <= b.hi[2]);
+            g_interior_hero_set = -1;
+            if (const uint32_t hero = lwu(OV(0x0015ffd8u)); hero != 0) g_interior_hero_set = lbu(hero + 0x38);
+            for (int n : g_interior_sets) inside = inside || n == g_interior_hero_set;
+            static int32_t ilvl = -1;
+            const float want = inside ? 1.0f : 0.0f;
+            if (lw(0x0015ed84) != ilvl) {
+                ilvl = lw(0x0015ed84);
+                g_interior_k = want;
+            } else {
+                g_interior_k += std::clamp(want - g_interior_k, -1.0f / kInteriorFade, 1.0f / kInteriorFade);
+            }
+        }
         static glm::vec3 cur{0.0f, 0.0f, 1.0f};
         static float curw = 0.0f;
         static int32_t lvl = -1;
@@ -442,11 +475,11 @@ void fit_cascades() {
             }
         }
         g_sh.sun = cur;
-        g_sh.sun_k = curw;
+        g_sh.sun_k = curw * (1.0f - g_interior_k);  // (an interior: faded out apart from the zone's own fade)
         g_sh.key = curkey;
         g_sh.key_dir = curkey_dir;
-        g_has_sun.store(curw > 0.01f);
-        g_casc_on.store(curw > 0.01f || zone_w > 0.01f);
+        g_has_sun.store(g_sh.sun_k > 0.01f);
+        g_casc_on.store(g_sh.sun_k > 0.01f || (cover_probe_on() && zone_w > 0.01f));
     }
     for (int i = 0; i < 3; ++i) g_cull_sun[i] = g_sh.sun[i];  // (the casters' search of the next frames: the level's sun is fixed)
     g_cull_tan[0] = 1.0f / g_sh.proj.x;
@@ -663,7 +696,7 @@ void point_shadows_pass() {
         std::pair<float, int> want[kMaxPts];
         int nwant = 0;
         for (int i = 0; i < g_sh.npts; ++i) {
-            if (g_sh.pt_slot[i] >= 0) continue;
+            if (g_sh.pt_slot[i] >= 0 || g_sh.pt_slot[i] == -2) continue;  // (-2: a moby's own lamp - its mesh would hide it)
             const float p[3] = {g_sh.pt_pos[i].x, g_sh.pt_pos[i].y, g_sh.pt_pos[i].z};
             const float d = mrp_moby_nearest_part(p) / g_sh.pt_pos[i].w;
             if (d < 1.0f) want[nwant++] = {d, i};
@@ -1105,7 +1138,7 @@ namespace {
 // orig: (host) the view covered from the sun (see kProbeW): this frame's samples drawn and read into a pixel buffer, the last
 // frame's read (its fence long passed: the map does not wait in practice; always the last frame's - the same picture every run)
 void cover_probe(GLint fb, const int vp[4]) {
-    static const int on = env_int("RAC1_SUN_COVER", 1);  // (testing: 0 off)
+    const bool on = cover_probe_on();
     static const bool trace = std::getenv("RAC1_SUN_COVER_TRACE") != nullptr;
     Probe& P = g_probe;
     const int32_t level = lw(0x0015ed84);
@@ -1185,8 +1218,8 @@ void cover_probe(GLint fb, const int vp[4]) {
     if (trace) {
         static uint64_t n = 0;
         if (n++ % 60 == 0)
-            std::printf("[sun] cover probe: %.0f %% sees the sun, %.0f %% sky, outdoors %.2f (%zu places): the sun's weight x %.2f\n", 100.0f * P.open, 100.0f * P.sky,
-                        P.outdoors, P.sky_at.size(), P.k);
+            std::printf("[sun] cover probe: %.0f %% sees the sun, %.0f %% sky, outdoors %.2f (%zu places): the sun's weight x %.2f; camera %.1f %.1f %.1f\n", 100.0f * P.open,
+                        100.0f * P.sky, P.outdoors, P.sky_at.size(), P.k, g_sh.cam.x, g_sh.cam.y, g_sh.cam.z);
     }
     // this frame's: the depth at 2 kProbeW x 2 kProbeH (a blit of the same format, nearest)
     GLenum fmt = P.dfmt;
@@ -1262,6 +1295,8 @@ void mrp_lighting_ao_pass() {
     if (!g_sh.on) return;
     int vp[4];
     if (!mrp_world_last_viewport(vp)) return;
+    screen_point_read(vp);
+    lamp_scan(vp);
     GLint fb = 0, rfb = 0, prev_prog = 0, prev_vao = 0, prev_vp[4] = {}, prev_active = 0, prev_t0 = 0, prev_t1 = 0, prev_rb = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &fb);
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
@@ -1466,6 +1501,7 @@ void mrp_lighting_ao_pass() {
 namespace {
 std::vector<UserLight> g_user;
 std::vector<int> g_user_noauto;  // the tie classes whose automatic emitters are off
+std::vector<ClassLight> g_class_lights;  // the lights per object class ("emit")
 std::vector<std::string> g_user_notes;  // the file's own comment lines (why a class is off), kept when the editor saves it
 int g_user_level = -1;
 std::string g_user_path;
@@ -1481,6 +1517,9 @@ void user_load(int level) {
     g_user.clear();
     g_user_noauto.clear();
     g_sun_file = SunFile{};
+    g_interiors.clear();
+    g_interior_sets.clear();
+    g_class_lights.clear();
     g_sun_snap = true;  // (a level's sun, or the file read again: at once)
     g_user_notes.clear();
     g_user_level = level;
@@ -1500,6 +1539,28 @@ void user_load(int level) {
         }
         if (std::sscanf(line, "noauto %d", &cls) == 1) {
             g_user_noauto.push_back(cls);
+            continue;
+        }
+        if (SunInterior b; std::sscanf(line, "interior %f %f %f %f %f %f", &b.lo[0], &b.lo[1], &b.lo[2], &b.hi[0], &b.hi[1], &b.hi[2]) == 6) {
+            for (int i = 0; i < 3; ++i)
+                if (b.lo[i] > b.hi[i]) std::swap(b.lo[i], b.hi[i]);
+            g_interiors.push_back(b);
+            continue;
+        }
+        {  // "emit <tie|moby> <class> <ox oy oz> <r g b> <intensity> <radius> [flicker]"
+            ClassLight cl;
+            char kind[8] = {};
+            const int got = std::sscanf(line, "emit %7s %d %f %f %f %f %f %f %f %f %f", kind, &cl.o_class, &cl.off[0], &cl.off[1], &cl.off[2], &cl.col[0], &cl.col[1],
+                                        &cl.col[2], &cl.intensity, &cl.radius, &cl.flicker);
+            if (got >= 10 && (std::strcmp(kind, "tie") == 0 || std::strcmp(kind, "moby") == 0 || std::strcmp(kind, "shrub") == 0)) {
+                cl.moby = std::strcmp(kind, "moby") == 0;
+                cl.shrub = std::strcmp(kind, "shrub") == 0;
+                g_class_lights.push_back(cl);
+                continue;
+            }
+        }
+        if (int n = 0; std::sscanf(line, "interior_set %d", &n) == 1) {
+            g_interior_sets.push_back(n);
             continue;
         }
         if (float az = 0, el = 0; std::sscanf(line, "sun %f %f", &az, &el) == 2) {
@@ -1538,6 +1599,18 @@ void mrp_user_sun_set(bool on, float az, float el) {
     g_sun_file.on = on;
     g_sun_file.az = az;
     g_sun_file.el = std::clamp(el, 5.0f, 90.0f);
+}
+// orig: (host) see mrp_lighting.h
+std::vector<ClassLight>& mrp_user_class_lights() { return g_class_lights; }
+int g_class_light_selected = -1;
+// orig: (host) see mrp_lighting.h
+std::vector<SunInterior>& mrp_user_interiors() { return g_interiors; }
+// orig: (host) see mrp_lighting.h
+std::vector<int>& mrp_user_interior_sets() { return g_interior_sets; }
+// orig: (host) see mrp_lighting.h
+float mrp_lighting_interior(int* hero_set) {
+    *hero_set = g_interior_hero_set;
+    return g_interior_k;
 }
 // orig: (host) see mrp_lighting.h
 bool mrp_lighting_sun_turn(float r[9]) {
@@ -1588,6 +1661,13 @@ bool mrp_user_lights_save() {
     std::fprintf(f, "# light x y z  r g b  intensity radius flicker on\n");
     for (const std::string& n : g_user_notes) std::fprintf(f, "%s\n", n.c_str());
     if (g_sun_file.on) std::fprintf(f, "sun %.1f %.1f\n", g_sun_file.az, g_sun_file.el);
+    for (int n : g_interior_sets) std::fprintf(f, "interior_set %d\n", n);
+    for (const ClassLight& cl : g_class_lights)
+        if (cl.on)
+            std::fprintf(f, "emit %s %d  %.3f %.3f %.3f  %.3f %.3f %.3f  %.3f %.3f %.3f\n", cl.moby ? "moby" : cl.shrub ? "shrub" : "tie", cl.o_class, cl.off[0], cl.off[1], cl.off[2], cl.col[0],
+                         cl.col[1], cl.col[2], cl.intensity, cl.radius, cl.flicker);
+    for (const SunInterior& b : g_interiors)
+        std::fprintf(f, "interior %.1f %.1f %.1f  %.1f %.1f %.1f\n", b.lo[0], b.lo[1], b.lo[2], b.hi[0], b.hi[1], b.hi[2]);
     for (int c : g_user_noauto) std::fprintf(f, "noauto %d\n", c);
     for (const UserLight& l : g_user)
         std::fprintf(f, "light %.3f %.3f %.3f  %.3f %.3f %.3f  %.3f %.3f %.3f %d\n", l.pos[0], l.pos[1], l.pos[2], l.col[0], l.col[1], l.col[2], l.intensity, l.radius,
@@ -1646,6 +1726,325 @@ bool mrp_lighting_cull_params(float sun[3], float splits[3], float* back, float*
     return true;
 }
 
+namespace {
+float g_pick_uv[2] = {-1.0f, -1.0f};  // (the point of the screen asked: 0..1 of the 3D's viewport, from the bottom left)
+bool g_pick_ok = false;
+float g_pick_world[3] = {0.0f, 0.0f, 0.0f};
+// orig: (host) the asked screen point's world position: the 3D's depth there (after the world and the mobys, before the effects)
+// through the world's view-projection inverted
+// orig: (host) testing, RAC1_LAMP_SCAN=<every>: every that many frames the 3D picture (before the effects) is read, its bright
+// texels (luma >= 0.8) not on the sky taken through the depth to the world and to the objects there (mrp_lighting_pick); per class
+// how often, the mean colour and a place, printed at the level's end and every 600 frames: a survey of what glows on screen
+float hue_deg(float r, float g, float b) {
+    const float mx = std::max({r, g, b}), mn = std::min({r, g, b});
+    if (!(mx - mn > 1e-6f)) return 0.0f;
+    const float h = mx == r ? std::fmod((g - b) / (mx - mn), 6.0f) : mx == g ? (b - r) / (mx - mn) + 2.0f : (r - g) / (mx - mn) + 4.0f;
+    return h < 0.0f ? h * 60.0f + 360.0f : h * 60.0f;
+}
+void lamp_scan(const int vp[4]) {
+    static int every = -1, from = 0;
+    if (every < 0) {  // (RAC1_LAMP_SCAN=<every>[,<from frame>])
+        every = 0;
+        if (const char* e = std::getenv("RAC1_LAMP_SCAN")) {
+            std::sscanf(e, "%d,%d", &every, &from);
+            every = std::max(1, every);
+        }
+    }
+    if (every == 0) return;
+    static uint64_t n = 0;
+    ++n;
+    struct Acc {
+        int hits = 0;
+        double c[3] = {0, 0, 0};
+        float at[3] = {0, 0, 0};
+    };
+    static std::map<std::pair<int, int>, Acc> acc;  // (kind 0 tie, 1 shrub, 2 moby, 3 none; class)
+    if (n % 600 == 0 && !acc.empty()) {
+        std::printf("[lamps] level %d, %llu frames:\n", static_cast<int>(lw(0x0015ed84)), static_cast<unsigned long long>(n));
+        for (const auto& [k, a] : acc)
+            if (a.hits >= 3)
+                std::printf("[lamps]   %s %d: %d hits, colour %.2f %.2f %.2f, e.g. at %.1f %.1f %.1f\n", k.first == 0 ? "tie" : k.first == 1 ? "shrub" : k.first == 2 ? "moby" : "world",
+                            k.second, a.hits, a.c[0] / a.hits, a.c[1] / a.hits, a.c[2] / a.hits, a.at[0], a.at[1], a.at[2]);
+    }
+    if (n % static_cast<uint64_t>(every) != 0 || n < static_cast<uint64_t>(from)) return;
+    const int w = vp[2], h = vp[3];
+    std::vector<uint8_t> col(static_cast<size_t>(w) * h * 4);
+    std::vector<float> dep(static_cast<size_t>(w) * h);
+    GLint rfb = 0, dfb = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &dfb);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(dfb));
+    glReadPixels(vp[0], vp[1], w, h, GL_RGBA, GL_UNSIGNED_BYTE, col.data());
+    glReadPixels(vp[0], vp[1], w, h, GL_DEPTH_COMPONENT, GL_FLOAT, dep.data());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(rfb));
+    float m[16];
+    mrp_world_view_proj(m);
+    const glm::mat4 inv = glm::inverse(glm::make_mat4(m));
+    for (int y = 2; y < h; y += 6)
+        for (int x = 2; x < w; x += 6) {
+            const size_t i = static_cast<size_t>(y) * w + x;
+            const float d = dep[i];
+            if (!(d < 1.0f)) continue;
+            const float r = col[4 * i] / 255.0f, g = col[4 * i + 1] / 255.0f, b = col[4 * i + 2] / 255.0f;
+            const float mx = std::max({r, g, b}), mn = std::min({r, g, b});
+            const float hue = hue_deg(r, g, b);
+            // (bright, and white, cool or strongly coloured: a sunlit leaf or a sandy rock is a warm, half-saturated colour)
+            if (0.299f * r + 0.587f * g + 0.114f * b < 0.75f || !(mx - mn <= 0.2f * mx || (hue >= 160.0f && hue <= 300.0f) || (mx - mn) >= 0.75f * mx)) continue;
+            const glm::vec4 wp = inv * glm::vec4((x + 0.5f) / w * 2.0f - 1.0f, (y + 0.5f) / h * 2.0f - 1.0f, d * 2.0f - 1.0f, 1.0f);
+            const float p[3] = {wp.x / wp.w, wp.y / wp.w, wp.z / wp.w};
+            const LightPick pk = mrp_lighting_pick(p);
+            const std::pair<int, int> key = pk.shrub ? std::make_pair(1, pk.shrub_class) : pk.tie ? std::make_pair(0, pk.tie_class)
+                                          : pk.moby && pk.moby_dist < 3.0f ? std::make_pair(2, pk.moby_class) : std::make_pair(3, 0);
+            Acc& a = acc[key];
+            ++a.hits;
+            a.c[0] += r;
+            a.c[1] += g;
+            a.c[2] += b;
+            for (int k = 0; k < 3; ++k) a.at[k] = p[k];
+        }
+}
+void screen_point_read(const int vp[4]) {
+    static float env_uv[2] = {-2.0f, -2.0f};
+    if (env_uv[0] == -2.0f) {  // (testing: RAC1_PICK_SCREEN=u,v - the point printed with its objects every 60 frames)
+        env_uv[0] = -1.0f;
+        if (const char* e = std::getenv("RAC1_PICK_SCREEN")) std::sscanf(e, "%f,%f", &env_uv[0], &env_uv[1]);
+    }
+    if (env_uv[0] >= 0.0f) {
+        g_pick_uv[0] = env_uv[0];
+        g_pick_uv[1] = env_uv[1];
+    }
+    if (g_pick_uv[0] < 0.0f) return;
+    const int x = vp[0] + static_cast<int>(g_pick_uv[0] * static_cast<float>(vp[2])), y = vp[1] + static_cast<int>(g_pick_uv[1] * static_cast<float>(vp[3]));
+    float d = 1.0f;
+    GLint rfb = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
+    GLint dfb = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &dfb);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(dfb));
+    glReadPixels(x, y, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &d);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(rfb));
+    g_pick_ok = d < 1.0f;
+    if (g_pick_ok) {
+        float m[16];
+        mrp_world_view_proj(m);
+        const glm::vec4 w = glm::inverse(glm::make_mat4(m)) * glm::vec4(g_pick_uv[0] * 2.0f - 1.0f, g_pick_uv[1] * 2.0f - 1.0f, d * 2.0f - 1.0f, 1.0f);
+        for (int k = 0; k < 3; ++k) g_pick_world[k] = w[k] / w.w;
+    }
+    if (env_uv[0] >= 0.0f) {
+        static uint64_t n = 0;
+        if (n++ % 60 == 30 && g_pick_ok) {
+            const LightPick pk = mrp_lighting_pick(g_pick_world);
+            std::printf("[lights] screen %.2f %.2f: %.2f %.2f %.2f; tie %d class %d offset %.3f %.3f %.3f; shrub %d class %d offset %.3f %.3f %.3f; moby %d class %d (%.2f away)\n",
+                        g_pick_uv[0], g_pick_uv[1], g_pick_world[0], g_pick_world[1], g_pick_world[2], pk.tie ? 1 : 0, pk.tie_class, pk.tie_off[0], pk.tie_off[1], pk.tie_off[2],
+                        pk.shrub ? 1 : 0, pk.shrub_class, pk.shrub_off[0], pk.shrub_off[1], pk.shrub_off[2], pk.moby ? 1 : 0, pk.moby_class, pk.moby_dist);
+        }
+    }
+}
+}  // namespace
+
+// orig: (host) see mrp_lighting.h
+bool mrp_lighting_screen_point(float u, float v, float out[3]) {
+    g_pick_uv[0] = u;
+    g_pick_uv[1] = v;
+    for (int k = 0; k < 3; ++k) out[k] = g_pick_world[k];
+    return g_pick_ok;
+}
+
+// orig: (host) see mrp_lighting.h
+LightPick mrp_lighting_pick(const float p[3]) {
+    LightPick r;
+    const glm::vec3 P(p[0], p[1], p[2]);
+    float best = 1e30f;
+    float best_shrub = 1e30f;
+    for (const TieSpot& t : mrp_world_tie_instances()) {
+        const glm::vec3 d = P - glm::vec3(t.pos[0], t.pos[1], t.pos[2]);
+        if (glm::dot(d, d) > 400.0f * 400.0f) continue;
+        if (t.shrub) {  // (a shrub: its bounding sphere, the smallest holding the point)
+            const float ds = glm::length(P - glm::vec3(t.sphere[0], t.sphere[1], t.sphere[2]));
+            if (ds <= t.sphere[3] + 0.2f && t.sphere[3] < best_shrub) {
+                best_shrub = t.sphere[3];
+                r.shrub = true;
+                r.shrub_class = t.o_class;
+                const glm::mat3 M(glm::vec3(t.rows[0][0], t.rows[0][1], t.rows[0][2]), glm::vec3(t.rows[1][0], t.rows[1][1], t.rows[1][2]),
+                                  glm::vec3(t.rows[2][0], t.rows[2][1], t.rows[2][2]));
+                const glm::vec3 l = std::fabs(glm::determinant(M)) > 1e-12f ? glm::inverse(M) * d : glm::vec3(0.0f);
+                for (int k = 0; k < 3; ++k) r.shrub_off[k] = l[k];
+            }
+            continue;
+        }
+        const glm::mat3 M(glm::vec3(t.rows[0][0], t.rows[0][1], t.rows[0][2]), glm::vec3(t.rows[1][0], t.rows[1][1], t.rows[1][2]),
+                          glm::vec3(t.rows[2][0], t.rows[2][1], t.rows[2][2]));  // (columns: world = pos + M l)
+        if (std::fabs(glm::determinant(M)) < 1e-12f) continue;
+        const glm::vec3 l = glm::inverse(M) * d;
+        bool in = true;
+        float vol = 1.0f;
+        for (int k = 0; k < 3; ++k) {
+            const float m = 0.15f;
+            in = in && l[k] >= t.lo[k] - m && l[k] <= t.hi[k] + m;
+            vol *= std::max(t.hi[k] - t.lo[k], 0.05f);
+        }
+        if (in && vol < best) {
+            best = vol;
+            r.tie = true;
+            r.tie_class = t.o_class;
+            for (int k = 0; k < 3; ++k) r.tie_off[k] = l[k];
+        }
+    }
+    const uint32_t first = lwu(OV(0x0015ffd8u)), last = lwu(OV(0x0015ffdcu));
+    r.moby_dist = 6.0f;  // (a moby whose origin is at its foot: a door frame, a lamp post)
+    for (uint32_t m = first; m != 0 && m < 0x01fe0000u && (last == 0 || m <= last) && lbu(m + 0x20) != 0xff; m += 0x100) {
+        if (static_cast<int8_t>(lbu(m + 0x20)) < 0) continue;
+        const glm::vec3 mp(lwc1(m + 0x10), lwc1(m + 0x14), lwc1(m + 0x18));
+        const float d = glm::length(P - mp);
+        if (d >= r.moby_dist) continue;
+        r.moby = true;
+        r.moby_dist = d;
+        r.moby_class = lh(m + 0xa6);
+        for (uint32_t k = 0; k < 3; ++k) {  // (the point in the moby's frame: its rows normalised)
+            glm::vec3 row(lwc1(m + 0xc0 + 0x10 * k), lwc1(m + 0xc4 + 0x10 * k), lwc1(m + 0xc8 + 0x10 * k));
+            const float len = glm::length(row);
+            r.moby_off[k] = len > 0.0f ? glm::dot(P - mp, row / len) : 0.0f;
+        }
+    }
+    return r;
+}
+
+namespace {
+// orig: (host) the lights per object class (g_class_lights) near the camera added to the frame's point lights after the ones placed
+// by hand: the tie instances of each class (mrp_world_tie_instances) and the live mobys of each (the list from *(0x15ffd8), 0x100
+// each, to the state 0xff), the offset turned with each; the nearest first, faded at the reach and at the first left out (no pop)
+void class_lights_add(double t) {
+    if (const char* e = std::getenv("RAC1_TIE_NEAR")) {  // (testing: the tie instances near a point, once: x,y,z,r)
+        static bool shown = false;
+        float x = 0, y = 0, z = 0, r = 6;
+        if (!shown && g_sh.frame > 60 && std::sscanf(e, "%f,%f,%f,%f", &x, &y, &z, &r) >= 3) {
+            shown = true;
+            for (const TieSpot& ti : mrp_world_tie_instances()) {
+                const float d = glm::length(glm::vec3(ti.pos[0], ti.pos[1], ti.pos[2]) - glm::vec3(x, y, z));
+                if (d <= r) {
+                    const glm::mat3 M(glm::vec3(ti.rows[0][0], ti.rows[0][1], ti.rows[0][2]), glm::vec3(ti.rows[1][0], ti.rows[1][1], ti.rows[1][2]),
+                                      glm::vec3(ti.rows[2][0], ti.rows[2][1], ti.rows[2][2]));
+                    const glm::vec3 l = std::fabs(glm::determinant(M)) > 1e-12f ? glm::inverse(M) * (glm::vec3(x, y, z) - glm::vec3(ti.pos[0], ti.pos[1], ti.pos[2])) : glm::vec3(0.0f);
+                    std::printf("[lights] %s class %d instance at %.2f %.2f %.2f (%.1f away); the point at %.2f %.2f %.2f, box %.2f %.2f %.2f .. %.2f %.2f %.2f, sphere %.1f %.1f %.1f r %.1f\n",
+                                ti.shrub ? "shrub" : "tie", ti.o_class, ti.pos[0], ti.pos[1], ti.pos[2], d, l.x, l.y, l.z, ti.lo[0], ti.lo[1], ti.lo[2], ti.hi[0], ti.hi[1], ti.hi[2],
+                                ti.sphere[0], ti.sphere[1], ti.sphere[2], ti.sphere[3]);
+                }
+            }
+            const uint32_t first = lwu(OV(0x0015ffd8u)), last = lwu(OV(0x0015ffdcu));
+            for (uint32_t m = first; m != 0 && m < 0x01fe0000u && (last == 0 || m <= last) && lbu(m + 0x20) != 0xff; m += 0x100) {
+                const glm::vec3 mp(lwc1(m + 0x10), lwc1(m + 0x14), lwc1(m + 0x18));
+                const float d = glm::length(mp - glm::vec3(x, y, z));
+                if (d <= r) std::printf("[lights] moby class %d (state %d) at %.2f %.2f %.2f (%.1f away)\n", lh(m + 0xa6), lbu(m + 0x20), mp.x, mp.y, mp.z, d);
+            }
+        }
+    }
+    if (const char* e = std::getenv("RAC1_PICK")) {  // (testing: the objects at a point, once: x,y,z)
+        static bool shown = false;
+        float q[3] = {};
+        if (!shown && g_sh.frame > 60 && std::sscanf(e, "%f,%f,%f", &q[0], &q[1], &q[2]) == 3) {
+            shown = true;
+            const LightPick pk = mrp_lighting_pick(q);
+            std::printf("[lights] pick %.2f %.2f %.2f: tie %d class %d offset %.3f %.3f %.3f; shrub %d class %d offset %.3f %.3f %.3f; moby %d class %d (%.2f away) offset %.3f %.3f %.3f\n",
+                        q[0], q[1], q[2], pk.tie ? 1 : 0, pk.tie_class, pk.tie_off[0], pk.tie_off[1], pk.tie_off[2], pk.shrub ? 1 : 0, pk.shrub_class, pk.shrub_off[0], pk.shrub_off[1],
+                        pk.shrub_off[2], pk.moby ? 1 : 0, pk.moby_class, pk.moby_dist, pk.moby_off[0], pk.moby_off[1], pk.moby_off[2]);
+        }
+    }
+    {  // the level's lights per class, once per level: how many instances each finds (a class with none: a wrong class or kind)
+        static int shown_level = -1;
+        const int level = static_cast<int>(lw(0x0015ed84));
+        if (level != shown_level && g_user_level == level && g_sh.frame > 30) {
+            shown_level = level;
+            for (const ClassLight& cl : g_class_lights) {
+                int n = 0;
+                if (cl.moby) {
+                    const uint32_t first = lwu(OV(0x0015ffd8u)), last = lwu(OV(0x0015ffdcu));
+                    for (uint32_t m = first; m != 0 && m < 0x01fe0000u && (last == 0 || m <= last) && lbu(m + 0x20) != 0xff; m += 0x100)
+                        n += static_cast<int8_t>(lbu(m + 0x20)) >= 0 && lh(m + 0xa6) == cl.o_class ? 1 : 0;
+                } else {
+                    for (const TieSpot& t : mrp_world_tie_instances()) n += t.shrub == cl.shrub && t.o_class == cl.o_class ? 1 : 0;
+                }
+                std::printf("[lights] level %d: emit %s %d: %d instances%s\n", level, cl.moby ? "moby" : cl.shrub ? "shrub" : "tie", cl.o_class, n,
+                            cl.moby ? " (live now)" : "");
+            }
+        }
+    }
+    if (g_class_lights.empty() || g_sh.npts >= kMaxPts) return;
+    struct Cand {
+        float d;
+        glm::vec3 p;
+        size_t cl;
+        uint32_t id;
+    };
+    static std::vector<Cand> cand;
+    cand.clear();
+    const float reach = g_sh.splits[1];
+    auto add = [&](size_t i, const glm::vec3& p, uint32_t id) {
+        const float d = glm::length(p - g_sh.cam) - g_class_lights[i].radius;
+        if (d < reach) cand.push_back({d, p, i, id});
+    };
+    bool any_moby = false;
+    for (size_t i = 0; i < g_class_lights.size(); ++i) {
+        const ClassLight& cl = g_class_lights[i];
+        if (!cl.on || !(cl.radius > 0.0f)) continue;
+        if (cl.moby) {
+            any_moby = true;
+            continue;
+        }
+        const std::vector<TieSpot>& ties = mrp_world_tie_instances();
+        for (size_t k = 0; k < ties.size(); ++k) {
+            const TieSpot& ti = ties[k];
+            if (ti.o_class != cl.o_class || ti.shrub != cl.shrub) continue;
+            glm::vec3 p(ti.pos[0], ti.pos[1], ti.pos[2]);
+            for (int r = 0; r < 3; ++r) p += glm::vec3(ti.rows[r][0], ti.rows[r][1], ti.rows[r][2]) * cl.off[r];
+            add(i, p, static_cast<uint32_t>(k));
+        }
+    }
+    if (any_moby) {
+        const uint32_t first = lwu(OV(0x0015ffd8u)), last = lwu(OV(0x0015ffdcu));
+        for (uint32_t m = first; m != 0 && m < 0x01fe0000u && (last == 0 || m <= last) && lbu(m + 0x20) != 0xff; m += 0x100) {
+            if (static_cast<int8_t>(lbu(m + 0x20)) < 0) continue;  // (a dead slot)
+            const int cls = lh(m + 0xa6);
+            for (size_t i = 0; i < g_class_lights.size(); ++i) {
+                const ClassLight& cl = g_class_lights[i];
+                if (!cl.on || !cl.moby || cl.o_class != cls) continue;
+                glm::vec3 p(lwc1(m + 0x10), lwc1(m + 0x14), lwc1(m + 0x18));
+                for (uint32_t r = 0; r < 3; ++r) {  // (the moby's rows, normalised: the offset in world units, turned with it)
+                    glm::vec3 row(lwc1(m + 0xc0 + 0x10 * r), lwc1(m + 0xc4 + 0x10 * r), lwc1(m + 0xc8 + 0x10 * r));
+                    const float len = glm::length(row);
+                    if (len > 0.0f) row /= len;
+                    p += row * cl.off[r];
+                }
+                add(i, p, m);
+            }
+        }
+    }
+    std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.d < b.d; });
+    const int budget = kMaxPts - g_sh.npts;
+    const int n = std::min(budget, static_cast<int>(cand.size()));
+    constexpr float kFade = 6.0f;
+    const float cut = static_cast<int>(cand.size()) > budget ? cand[static_cast<size_t>(budget)].d : reach;
+    for (int k = 0; k < n; ++k) {
+        const Cand& c = cand[static_cast<size_t>(k)];
+        const ClassLight& cl = g_class_lights[c.cl];
+        float f = cl.intensity * std::clamp((reach - c.d) / kFade, 0.0f, 1.0f) * std::clamp((cut - c.d) / kFade, 0.0f, 1.0f);
+        if (cl.flicker > 0.0f) {  // (as the lights placed by hand: per instance)
+            const double ph = static_cast<double>(c.id % 997) * 1.7;
+            const double w = 0.5 * std::sin(t * 7.3 + ph) + 0.3 * std::sin(t * 13.1 + ph * 2.0) + 0.2 * std::sin(t * 29.7 + ph * 3.0);
+            f *= 1.0f - cl.flicker * 0.35f * static_cast<float>(1.0 + w);
+        }
+        if (static_cast<int>(c.cl) == g_class_light_selected) f *= 0.6f + 0.4f * static_cast<float>(std::sin(t * 8.0));  // (the debug menu's: pulsing)
+        g_sh.pt_pos[g_sh.npts] = glm::vec4(c.p, cl.radius);
+        g_sh.pt_col[g_sh.npts] = glm::vec4(cl.col[0] * f, cl.col[1] * f, cl.col[2] * f, -1.0f);
+        g_sh.pt_slot[g_sh.npts] = cl.moby ? -2 : -1;  // (a moby's lamp: no shadow cube - its own mesh around the light would hide it)
+        ++g_sh.npts;
+    }
+    if (std::getenv("RAC1_LIGHTS_TRACE") != nullptr) {
+        static uint64_t calls = 0;
+        if (calls++ % 60 == 0) std::printf("[lights] per class: %zu near, %d taken\n", cand.size(), n);
+    }
+}
+}  // namespace
+
 // orig: (host) see mrp_lighting.h
 void mrp_lighting_shadow_pass() {
     g_sh.on = false;
@@ -1698,6 +2097,7 @@ void mrp_lighting_shadow_pass() {
             g_sh.pt_slot[g_sh.npts] = -1;
             ++g_sh.npts;
         }
+        class_lights_add(t);
     }
     if (g_modern_points != 0 && g_auto_lights != 0) {  // the automatic emitters near the camera, the nearest first
         float pr[4 * kMaxPts], pc[4 * kMaxPts];
@@ -1999,6 +2399,7 @@ ShadowLocs mrp_lighting_locs(unsigned prog) {
     l.sun_k = glGetUniformLocation(p, "uShSunK");
     l.key = glGetUniformLocation(p, "uShKey");
     l.key_dir = glGetUniformLocation(p, "uShKeyDir");
+    l.strength = glGetUniformLocation(p, "uShStrength");
     l.debug = glGetUniformLocation(p, "uShDebug");
     l.pt_n = glGetUniformLocation(p, "uPtN");
     l.pt_pos = glGetUniformLocation(p, "uPtPos");
@@ -2041,11 +2442,13 @@ void mrp_lighting_bind_receiver(const ShadowLocs& l, bool sky) {
     glUniformMatrix4fv(l.casc, kCascades, GL_FALSE, glm::value_ptr(m[0]));
     glUniform3f(l.cam, g_sh.cam.x, g_sh.cam.y, g_sh.cam.z);
     glUniform3f(l.sun, g_sh.sun.x, g_sh.sun.y, g_sh.sun.z);
-    glUniform4f(l.param, static_cast<float>(g_shadow_strength) / 100.0f, g_has_sun.load() ? static_cast<float>(kCascades) : 0.0f, 0.08f, 1.0f);
+    // (x: the share fallback's strength - the lighting's variants apply the strength to the visibility, uShStrength)
+    glUniform4f(l.param, l.strength >= 0 ? 1.0f : static_cast<float>(g_shadow_strength) / 100.0f, g_has_sun.load() ? static_cast<float>(kCascades) : 0.0f, 0.08f, 1.0f);
     glUniform3f(l.texel, g_sh.casc[0].texel, g_sh.casc[1].texel, g_sh.casc[2].texel);
     glUniform3f(l.part, g_sh.casc[0].part, g_sh.casc[1].part, g_sh.casc[2].part);
     if (l.sun_k >= 0) {  // (only the lighting's variants have them)
         glUniform1f(l.sun_k, g_sh.sun_k);
+        glUniform1f(l.strength, static_cast<float>(g_shadow_strength) / 100.0f);
         glUniform3f(l.key_dir, g_sh.key_dir.x, g_sh.key_dir.y, g_sh.key_dir.z);
         if (l.key >= 0) {  // (RAC1_WORLD_SHADOW=share, testing / no key light known: the old estimate, the strength's share of the colour)
             static const bool share = std::getenv("RAC1_WORLD_SHADOW") != nullptr && std::strcmp(std::getenv("RAC1_WORLD_SHADOW"), "share") == 0;

@@ -20,9 +20,12 @@ differs a lot between planets. Where each part comes from is described in
   hero's light sets, turned and faded as he moves from one zone to the next. A level's own file
   may turn it (`sun <azimuth> <elevation>`, the [sun editor](#the-sun-editor)) where the game's
   direction leaves whole areas in the permanent shade of the level's walls (Novalis). Where the zone's light does not come from above, there is no sun and no sun
-  shadows there. Where it does but a roof stops it (a room, a corridor, a ship's hold), so that
-  almost nothing in view sees the sun and no sky has been seen from there, its shadows fade out and
-  the picture is the original's lighting ([Views covered from the sun](#views-covered-from-the-sun)).
+  shadows there. Outdoors and in short covered places (a passage, a tunnel, under a bridge) the sun
+  is always on. In the level's **interiors**, marked in its file (caves, closed rooms, ships' holds:
+  `interior` boxes around the camera, `interior_set` light sets), the sun is off and the picture is
+  the original's lighting ([Interiors](#interiors)).
+- **Shadow Strength** (Options > Graphics, 50 to 100 %, default 70 %): how much of the sun's light
+  a shadow hides, the same everywhere; the rest stands for the sky's light in the shade.
 - **The world is lit by the sun, not by the baked key light.** The terrain and the objects of the
   world are lit by the game as a painted base colour plus the zone's lights. With the lighting on,
   the key light's baked term is taken off and the same light is put back from the sun's direction,
@@ -56,7 +59,7 @@ seen, and every one of them still needs a playtest.
 | Kerwan | Works. Few automatic lights. |
 | Eudora | Works. The heaviest level for the lighting (its forest has many shadow casters; roughly twice the frame time of the lighting off in the survey, on an integrated GPU). Trees and woodwork glow bright orange in the textures: they are recognised as materials and not turned into lights. Need some works. |
 | Rilgar | Works. Same warm-material handling as Eudora. Needs some works, some automatic lights are a bit non-sense |
-| Blarg (Nebula G34, Blarg's station) | **Still a mess, possibly better.** Playtesting found some zones pitch dark: the station's closed zones are lit by a light that reaches the floor only through the geometry above it, so the sun's shadow covered the whole zone. [Views covered from the sun](#views-covered-from-the-sun) now fades the sun out where almost nothing in view sees it, which should give those zones the original's look: in a headless check one closed room (light set 6) got exactly that, while the lounges with large windows still see enough sun to keep their shadows; the pitch-dark zones themselves were not found again, not yet playtested. The hangar has only a faint, low blue sun. |
+| Blarg (Nebula G34, Blarg's station) | **Still a mess, possibly better.** Playtesting found some zones pitch dark: the station's closed zones are lit by a light that reaches the floor only through the geometry above it, so the sun's shadow covered the whole zone. Closed zones are marked [interiors](#interiors) in `data/lights/level06.txt` (light set 6 so far, a closed room the old covered-view check found); the lounges with large windows keep their shadows. Other closed zones: to mark while playing. The hangar has only a faint, low blue sun. |
 | Umbris | Works outdoors: the dead trees cast long shadows. Near the lava the zone's light comes from below, so there is no sun there and the shadows fade out. No automatic lights are found on this level. |
 | Batalia | Works outdoors: a low warm sun (15 degrees) gives long shadows across the decks in the rain. No automatic lights: the towers' cyan bands are thin strips on their objects' textures (2 or 3 of a triangle's 7 samples, under the objects' 4-of-7 rule), so they cast no light. |
 | Gaspar | Works outdoors (sun at 40 degrees). Inside the buildings the view is covered from the sun and the picture is the original's. The tanks' gold band (tie class 1558, paint) was taken for a lamp and lit their corner gold: turned off in `data/lights/level09.txt`. The robots' shots, the game's own lights, light the floor and pillars per pixel, strongly. |
@@ -211,15 +214,15 @@ where he stands**.
    weight changes at most **1/30 a frame**. In a zone without a sun the shadows fade out in about
    half a second instead of vanishing. At weight 0 the cascades are not drawn. The original's drop
    shadows do not come back (they are never drawn with the lighting on).
-5. **The view covered** (our choice): the weight is then scaled by how much of the view sees the
-   sun, see [Views covered from the sun](#views-covered-from-the-sun).
+5. **Interiors** (our choice): the weight is faded to 0 in the level's interiors, see
+   [Interiors](#interiors).
 6. **The level's own sun** (our choice): the level's file may give the sun a direction of its own,
    see [The level's own sun](#the-levels-own-sun).
 7. **Overrides for testing:** `RAC1_SUN_DIR=x,y,z` turns the sun as a level's file would (a sun
    of weight 1 where the zone has none), `RAC1_SUN_LEVEL=1` always uses
    light set 0 (the old way), `RAC1_SUN_TRACE=1` prints the hero's sets and a census of the
-   sets the level's mobys use, `RAC1_SUN_COVER=0` turns the covered views' fade off and
-   `RAC1_SUN_COVER_TRACE=1` prints it.
+   sets the level's mobys use, `RAC1_SUN_COVER=1` turns the covered views' probe back on (now off,
+   see below) and `RAC1_SUN_COVER_TRACE=1` prints it.
 
 What the levels up to Umbris give (direction toward the sun):
 
@@ -249,9 +252,34 @@ On levels 8 to 18 the hero kept set 0 in every survey run (the other sets the le
 up to 8 on Hoven, are used by other mobys), so their sun is set 0's everywhere; their rooms are
 dealt with by the next section.
 
-### Views covered from the sun
+### Interiors
 
-Our choice, not the game's (`cover_probe` in `mrp_lighting.cpp`). A room, a corridor or a ship's
+Our choice, not the game's. A cave, a closed room or a ship's hold is lit by its zone's key light
+coming from above, so the sun's shadow of the roof would cover everything there: the sun is turned
+off and the picture is the original's lighting (with the point lights and the occlusion on top).
+Which places are interiors is data, in the level's file (`data/lights/levelNN.txt`):
+
+- `interior x0 y0 z0 x1 y1 z1`: a box; the sun is off while the **camera** is inside it. The
+  camera, not the hero: the picture is what the camera sees (a camera inside a room shows the room),
+  and it also works in Clank's and the vehicles' parts, where the hero moby is not the one on screen.
+  Draw a box a little larger than the room.
+- `interior_set <n>`: the sun is off while the hero is lit with the level's light set `n` (moby
+  +0x38): when an interior is a zone of its own in the game's light sets (Blarg's closed rooms).
+
+Entering or leaving, the sun fades over about 0.3 s (`kInteriorFade`), not a pop. The debug menu's
+Sun tab shows whether the camera is inside, the hero's light set, the boxes drawn over the picture,
+and adds a box around the camera or the hero's set; Save writes them with the level's file. Shipped:
+Orxon's base (its first rooms; a box), Blarg's closed room of light set 6. Drek's fleet's halls seen
+so far have windows on space and keep their shadows; its enclosed corridors and the levels' caves are
+still to be marked in playtests.
+
+### Views covered from the sun (off; testing)
+
+Our choice, not the game's (`cover_probe` in `mrp_lighting.cpp`), **now off**
+(`RAC1_SUN_COVER=1` turns it on for testing): a short covered passage (Kerwan's first tunnel
+toward the bridge with the arches) faded the sun out, everything brightened, and after it the
+shadows came back over a second - very noticeable. The interiors are now decided by data (above).
+What it did: A room, a corridor or a ship's
 hold is often lit by its zone's key light coming from above, so the sun's shadow of the roof covers
 everything in view and only darkens it: Orxon's base, Gaspar's halls, the whole of Drek's fleet,
 Blarg's station. The sun's shadows show nothing there, so they fade out:
@@ -387,7 +415,7 @@ Made in the debug menu (F1, Lights tab) and saved in `data/lights/level<NN>.txt`
 taken from the disc. They are lit like the automatic ones and ahead of them.
 
 The project's level files place no light: `level09.txt` (Gaspar) and `level10.txt` (Orxon) each turn
-off one automatic class that was taken for a lamp, and `level01.txt` (Novalis), `level03.txt`
+off one automatic class that was taken for a lamp, and `level01.txt` (Novalis, also its neons by class), `level03.txt`
 (Kerwan), `level04.txt` (Eudora), `level14.txt` (Oltanis) and `level15.txt` (Quartu) turn the sun,
 each with a comment saying why.
 
@@ -476,11 +504,15 @@ So the terrain is lit by the same key light, from the same direction, as the sun
 **With the lighting on, the world is relit by the sun** (`sh_apply`, the `SH_POINTS` variant):
 
 ```
-colour' = colour + w * (K(n, sun) * visibility - K(n, key))      K(n, d) = 128 / 255 * colour1 * max(n . d, k1 n . d)
+colour' = colour + w * (K(n, sun) * v - K(n, key))      K(n, d) = 128 / 255 * colour1 * max(n . d, k1 n . d)
+v = 1 - (1 - visibility) * strength
 ```
 
 The key light's baked term, from the direction the game lit with (`key`), is taken off; the same
-light from the sun's direction is put back, times the sun's visibility. `n` is the face normal,
+light from the sun's direction is put back, times the sun's visibility. `strength` is the Shadow
+Strength option (50 to 100 %, default 70 %): the share of the sun's light a shadow hides, the same
+for every shadow (no tiers); the rest stands for the sky's light in the shade. The mobys' shadows
+use the same strength. `n` is the face normal,
 `w` the sun's weight (the zone's, faded in a [covered view](#views-covered-from-the-sun): at 0 the
 colour is the game's). The painted base and the fill are kept: the base is the ambient. With the
 sun where the game has it, a point in the sun keeps its colour and a point in shadow loses the key
@@ -650,7 +682,35 @@ part of the original. The editor is in the debug menu (Lights tab), so it needs 
   used with Secondary Lights set to All (the file's sun whatever that setting). The project ships the
   files listed in [Lights placed by hand](#lights-placed-by-hand-our-choice).
 
-## Settings
+### Lights per object class
+
+Placing lamps one by one is slow; most lamps are one object class repeated. A level's file can say
+
+```
+emit <tie|shrub|moby> <class> <ox oy oz> <r g b> <intensity> <radius> [flicker]
+```
+
+and every tie or shrub instance of that class, or every live moby of that class, lights as a point
+light at the offset in its own frame (a tie's or shrub's rows, model / 1024 at its scale; a moby's
+rotation, in world units), so a moby's lamp follows it. At the level's start the log says how many
+instances each line found (`[lights] level 1: emit shrub 282: 7 instances`): none means a wrong
+class or kind. They go through the same path as the lights placed by hand:
+within 60 units of the camera, the nearest first and faded at the reach and at the cap (96 lights in
+all), with Secondary Lights on All. A moby's lamp gets no point-light shadow cube (the lamp's own
+mesh around the light would hide it); a tie's may (cast by mobys only, as the emitters').
+
+**In the editor** (Lights tab, "Lights per object class"): a crosshair at the centre of the
+picture; the world point under it (the depth read there) and the objects at it - the tie instance
+whose model's box holds it, the shrub whose sphere holds it, the nearest moby within 6 units - with
+their class and the point in their frame; **Emit for every tie / shrub / moby of this class** adds a light at that point of every
+instance, live, then the offset, colour, intensity, radius and flicker are edited and Save writes
+the `emit` lines with the rest of the file.
+
+Shipped: Novalis's neon tubes in the buildings by the river (shrub class 282, the panel of the
+fixture shrub 167; the automatic search does not see white texels, nor shrubs and mobys), Oltanis's
+street lamps (moby class 1511, a cyan light in each globe). `RAC1_LAMP_SCAN` (testing) surveys what
+glows on screen along a run, by class.
+
 
 All on Options > Graphics (`src/game/enhance/graphics.cpp`). They are kept in the graphics
 preferences and in each save's `save<N>.pc` (see [Settings](settings.md)). The New Game's Modern mode
@@ -659,6 +719,7 @@ does not turn the lighting on.
 | Row | Values | Default | Controls |
 |---|---|---|---|
 | Lighting | Original, Low, Medium, High | Original | the whole module; the sun shadow maps' resolution (1024, 2048, 4096) |
+| Shadow Strength | 50 to 100 % | 70 % | how much of the sun's light a shadow hides (`shadow_strength` in the preferences, item 45 of a save's block) |
 | Shadow Distance | Low, Medium, High, Maximum | Maximum | how far mobys cast sun shadows (40, 80, 140 units, or as far as the cascades reach) |
 | Dynamic Shadows | Off, On | Off | point-light cube shadows |
 | Secondary Lights | Off, Game's, All | All | Game's: the game's point lights per pixel; All: also automatic emitters and hand-placed lights |
@@ -708,14 +769,11 @@ Finding the automatic emitters costs 10 to 50 ms once per level (the survey of e
 - While any of the game's short-lived point lights is active, the world's vertex colours are held as they were.
 - The intensity value of the game's point lights is not used per pixel; only their colour and radius.
 - Lighting is not applied on the title screen, in menus or during fades.
-- A zone whose key light comes from below or the horizon has no sun shadows. A closed zone lit
-  through geometry gets the original's look only when almost nothing in view sees the sun and no
-  sky was seen from near the camera's place; a room with windows on the sky (Blarg's lounges) keeps
-  its shadows. Entering a room from outdoors, the sun fades out only 12 to 24 units in.
+- A zone whose key light comes from below or the horizon has no sun shadows. A closed place lit
+  through geometry gets the original's look only where the level's file marks it an interior; an
+  unmarked one is in the roof's shadow (shade at the Shadow Strength).
 - No shadow replaces the original's drop shadows where there is no sun shadow (rooms, zones without
   a sun); the ambient occlusion, when on, is the only contact darkening there.
-- The covered views' test looks at the last frame (one frame late) and at the cascades' reach
-  (220 units): beyond them, everything counts as seeing the sun.
-- The automatic lights are a heuristic: some lamps are missed (thin strips, lamps that are mobys:
-  Batalia's towers, Oltanis's street lamps), and a bright coloured material can be taken for a lamp
-  or the reverse.
+- The automatic lights are a heuristic: some lamps are missed (thin strips, white panels, lamps that
+  are mobys: Batalia's towers), and a bright coloured material can be taken for a lamp or the
+  reverse. Lamps it misses are given by class in the level's file (`emit`).

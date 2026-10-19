@@ -62,6 +62,34 @@ void mrp_user_lights_reload();
 const char* mrp_user_lights_path();
 // orig: (host) the debug menu's selected light (-1 none): it pulses, so that it is found
 extern int g_user_light_selected;
+// orig: (host) the level's lights per object class ("emit <tie|shrub|moby> <class> <ox oy oz> <r g b> <intensity> <radius> [flicker]" in its
+// file; our data): every instance of that tie class, or every live moby of that class, lights as a point light at the offset turned
+// with it (the instance's rows / the moby's matrix; world units at the object's scale), through the same per-pixel path as the
+// lights placed by hand (within reach of the camera, the nearest first, at most the shaders' count; Secondary Lights: All)
+struct ClassLight {
+    bool moby = false;
+    bool shrub = false;  // (a shrub class: its instances as a tie's)
+    int o_class = 0;
+    float off[3] = {0.0f, 0.0f, 0.0f};
+    float col[3] = {0.85f, 0.92f, 1.0f};
+    float intensity = 1.0f, radius = 8.0f, flicker = 0.0f;
+    bool on = true;
+};
+std::vector<ClassLight>& mrp_user_class_lights();
+// orig: (host) the objects at a world point (the debug menu's crosshair: the depth there): the tie instance whose model's box holds
+// it (the smallest), the nearest live moby within 6 units; each with its class and the point in its own frame (an "emit" offset)
+struct LightPick {
+    bool tie = false, moby = false, shrub = false;
+    int tie_class = 0, moby_class = 0, shrub_class = 0;
+    float tie_off[3] = {0.0f, 0.0f, 0.0f}, moby_off[3] = {0.0f, 0.0f, 0.0f}, shrub_off[3] = {0.0f, 0.0f, 0.0f};
+    float moby_dist = 0.0f;
+};
+LightPick mrp_lighting_pick(const float p[3]);
+// orig: (host) the world point under a point of the 3D's view (u, v: 0..1 from the bottom left; the debug menu's crosshair): asked
+// for the next frames, the last one read (false: the sky or nothing yet)
+bool mrp_lighting_screen_point(float u, float v, float out[3]);
+// orig: (host) the debug menu's selected class (-1 none): its lights pulse
+extern int g_class_light_selected;
 // orig: (host) the level's own sun ("sun <azimuth> <elevation>" in its file, degrees; azimuth from +x toward +y, the direction
 // toward the sun): the game's key light's direction replaced where the game has a sun, its colour and weight kept, and its own
 // direction still the one a shadow takes the key light's term off with. Our data, not the game's: where the key light's direction
@@ -71,6 +99,16 @@ void mrp_user_sun_set(bool on, float az, float el);
 // orig: (host) the rotation (column-major 3x3) taking the game's key light's direction to the sun's, true when the modern lighting is
 // on and the level's file turns the sun (the mobys' light records are turned with it: mrp_moby_renderer.cpp)
 bool mrp_lighting_sun_turn(float r[9]);
+// orig: (host) the level's interiors (its file: "interior x0 y0 z0 x1 y1 z1" boxes, "interior_set <n>" light sets; our data): where the
+// camera is in one of the boxes, or the hero is lit with one of the sets, the sun is off and the picture is the original's lighting
+// (faded over about 0.3 s): caves, closed rooms, ships' holds. Edited by the debug menu's Sun tab, saved with the level's file
+struct SunInterior {
+    float lo[3] = {0.0f, 0.0f, 0.0f}, hi[3] = {0.0f, 0.0f, 0.0f};
+};
+std::vector<SunInterior>& mrp_user_interiors();
+std::vector<int>& mrp_user_interior_sets();
+// orig: (host) how much the camera is inside an interior (0 .. 1, faded), and the hero's light set now
+float mrp_lighting_interior(int* hero_set);
 // orig: (host) the game's key light's direction as the shadows last used it (azimuth, elevation, degrees)
 void mrp_lighting_game_sun(float* az, float* el);
 // orig: (host) the tie classes whose automatic emitters the level's file turns off ("noauto <class>"), and on again
@@ -85,6 +123,17 @@ struct EmitterClass {
     bool material = false;
 };
 std::vector<EmitterClass> mrp_world_emitter_classes();
+// orig: (host) the level's tie instances (their class, position and rows - a model unit / 1024 is a world unit at scale 1), made
+// once per level from its tables (mrp_world_renderer.cpp)
+struct TieSpot {
+    int o_class = 0;
+    float pos[3] = {0.0f, 0.0f, 0.0f};
+    float rows[3][3] = {};
+    float lo[3] = {0.0f, 0.0f, 0.0f}, hi[3] = {0.0f, 0.0f, 0.0f};  // (the class's model's box, in the rows' units: model / 1024)
+    bool shrub = false;                    // (a shrub instance: no box, its bounding sphere)
+    float sphere[4] = {0.0f, 0.0f, 0.0f, 0.0f};  // (world centre, radius)
+};
+const std::vector<TieSpot>& mrp_world_tie_instances();
 // orig: (host) the automatic emitters made again (a class turned on or off)
 void mrp_world_emitters_rebuild();
 // orig: (host) the automatic emitters within `reach` of `cam` (their sphere's edge), the nearest first, at most `max`: position +
@@ -132,6 +181,7 @@ struct ShadowLocs {
     int part = -1;                           // (the cascades' squares' share of their layer)
     int sun_k = -1;                          // (the sun's shadows' weight)
     int key = -1, key_dir = -1;              // (the key light's colour and back factor, its direction: the world's shadows)
+    int strength = -1;                       // (the shadows' strength)
 };
 // orig: (host) the locations of a linked program
 ShadowLocs mrp_lighting_locs(unsigned prog);
@@ -192,7 +242,8 @@ bool mrp_moby_caster_rect(const float* light_vp, float rect[4], const float* wit
     "uniform float uShSunK;\n"           /* the sun's shadows' weight (the zone's light; faded) */      \
     "uniform vec4 uShKey;\n"             /* the key light's colour (x 128 / 255) and back factor; w < 0: none */ \
     "uniform vec3 uShKeyDir;\n"          /* toward the key light as the game lights with it (the sun may be turned) */ \
-    "float sh_vis = 1.0;\n"              /* the sun's visibility, the zone's weight not applied */ \
+    "uniform float uShStrength;\n"       /* the shadows' strength: the share of the key light a shadow hides (Options) */ \
+    "float sh_vis = 1.0;\n"              /* the sun's visibility (the strength applied), the zone's weight not applied */ \
     "#endif\n"                                                                                          \
     "uniform int uShDebug;\n"                                                                           \
     "uniform int uPtN;\n"                                                                               \
@@ -255,6 +306,7 @@ bool mrp_moby_caster_rect(const float* light_vp, float rect[4], const float* wit
     "        break;\n"                                                                                  \
     "    }\n"                                                                                           \
     "#if defined(SH_POINTS) || defined(SH_SPLIT)\n" /* one strength whatever blocks the sun, near or far: lit or not */ \
+    "    vis = 1.0 - (1.0 - vis) * uShStrength;\n"                                                    \
     "    sh_vis = vis;\n"                                                                              \
     "    vis = 1.0 - (1.0 - vis) * uShSunK;\n"                                                         \
     "#endif\n"                                                                                          \
