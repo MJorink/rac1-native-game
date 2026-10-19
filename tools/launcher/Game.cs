@@ -55,6 +55,54 @@ namespace Rac1Launcher
         }
     }
 
+    /// <summary>The update channel, the game's own setting (Options > Advanced > Update Channel): the line
+    /// "update_channel 0|1" of advanced_options.txt (src/game/enhance/advanced.cpp), which tools\setup.py --update also
+    /// reads. The launcher reads and writes that same line, so the two never disagree.</summary>
+    static class Channel
+    {
+        static string FilePath
+        {
+            get
+            {
+                string env = Environment.GetEnvironmentVariable("RAC1_ADVANCED_FILE");
+                return !string.IsNullOrEmpty(env) ? env : Path.Combine(Settings.ConfigDir, "advanced_options.txt");
+            }
+        }
+
+        public static bool Development
+        {
+            get
+            {
+                try
+                {
+                    foreach (var line in File.ReadAllLines(FilePath))
+                    {
+                        var p = line.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+                        if (p.Length == 2 && p[0] == "update_channel") return p[1] == "1";
+                    }
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+                return false;
+            }
+            set
+            {
+                // (the other lines kept as they are: the game's other Advanced settings)
+                var lines = new List<string>();
+                try { lines.AddRange(File.ReadAllLines(FilePath)); }
+                catch (IOException) { }
+                string row = "update_channel " + (value ? "1" : "0");
+                int i = lines.FindIndex(l => l.Split((char[])null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() == "update_channel");
+                if (i >= 0) lines[i] = row;
+                else lines.Add(row);
+                Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
+                File.WriteAllText(FilePath, string.Join("\n", lines) + "\n", new UTF8Encoding(false));
+            }
+        }
+
+        public static string Name => Development ? "development" : "stable";
+    }
+
     /// <summary>A folder with the game: its sources (a release's zip, or a clone), and what the setup made in it.</summary>
     class GameDir
     {
@@ -79,6 +127,29 @@ namespace Rac1Launcher
                 {
                     var m = Regex.Match(File.ReadAllText(P("CMakeLists.txt")), @"project\(\s*rac1-native\s+VERSION\s+(\d+\.\d+\.\d+)");
                     return m.Success ? new Version(m.Groups[1].Value) : null;
+                }
+                catch (IOException) { return null; }
+            }
+        }
+
+        /// <summary>The commit of main a development-channel download unpacked ("commit" in assets\update-version.txt,
+        /// written by the launcher and by tools\setup.py --update), or null.</summary>
+        public string InstalledCommit
+        {
+            get
+            {
+                try
+                {
+                    string f = P("assets", "update-version.txt");
+                    if (!File.Exists(f)) return null;
+                    bool main = false;
+                    string commit = null;
+                    foreach (var line in File.ReadAllLines(f))
+                    {
+                        if (line == "branch main") main = true;
+                        else if (line.StartsWith("commit ") && line.Length > 7) commit = line.Substring(7).Trim();
+                    }
+                    return main && !string.IsNullOrEmpty(commit) ? commit : null;
                 }
                 catch (IOException) { return null; }
             }
@@ -164,6 +235,18 @@ namespace Rac1Launcher
             return r;
         }
 
+        /// <summary>The newest commit on main (the development channel), its full hash.</summary>
+        public static string MainCommit()
+        {
+            string json;
+            using (var resp = Request(Api + "/commits/main").GetResponse())
+            using (var rd = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                json = rd.ReadToEnd();
+            string sha = JsonString(json, "sha");
+            if (string.IsNullOrEmpty(sha)) throw new InvalidDataException("GitHub's answer has no commit");
+            return sha;
+        }
+
         /// <summary>A string field of a JSON object (the first one with this name), unescaped; null when absent.</summary>
         static string JsonString(string json, string key)
         {
@@ -211,7 +294,9 @@ namespace Rac1Launcher
         /// <summary>Unpacks a release's source zip (GitHub's: one top folder) into dir, and records what it unpacked as
         /// tools\setup.py --update does (assets\update-version.txt for the version the game shows, and the files'
         /// hashes, so a later update removes the files a new version no longer has).</summary>
-        public static void Unpack(string zip, string dir, string tag, Action<string> log)
+        /// <param name="versionLines">assets\update-version.txt's lines, as tools\setup.py --update writes them: for a
+        /// release "describe v1.2.3", "commit ", "branch "; for main "describe abc1234", "commit &lt;hash&gt;", "branch main".</param>
+        public static void Unpack(string zip, string dir, string[] versionLines, Action<string> log)
         {
             var hashes = new SortedDictionary<string, string>(StringComparer.Ordinal);
             using (var za = ZipFile.OpenRead(zip))
@@ -237,7 +322,7 @@ namespace Rac1Launcher
             log($"Unpacked {hashes.Count} files.");
             string assets = Path.Combine(dir, "assets");
             Directory.CreateDirectory(assets);
-            File.WriteAllText(Path.Combine(assets, "update-version.txt"), $"describe {tag}\ncommit \nbranch \n", Encoding.ASCII);
+            File.WriteAllText(Path.Combine(assets, "update-version.txt"), string.Join("\n", versionLines) + "\n", Encoding.ASCII);
             string state = Path.Combine(assets, "setup-state.json");
             if (!File.Exists(state))
             {

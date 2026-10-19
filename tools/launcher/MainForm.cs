@@ -24,6 +24,7 @@ namespace Rac1Launcher
         GameDir game;
         State state = State.Checking;
         GitHub.Release latest;
+        string mainCommit;  // (the newest commit on main, for the development channel)
         Runner runner;  // (the task running now, or null)
         CancellationTokenSource cancel;
         Process gameProc;
@@ -46,7 +47,7 @@ namespace Rac1Launcher
         readonly Label lblCard = new Label();
         // Settings
         readonly TextBox txtDir = new TextBox(), txtIso = new TextBox();
-        readonly ComboBox cmbJobs = new ComboBox();
+        readonly ComboBox cmbJobs = new ComboBox(), cmbChannel = new ComboBox();
         readonly TabControl tabs = new TabControl();
         readonly List<Control> busyDisabled = new List<Control>();
 
@@ -257,6 +258,16 @@ namespace Rac1Launcher
             txtIso.Text = settings.Iso;
             AddRow(t, "Disc image", txtIso, Btn("Change...", (s, e) => { if (AskIso(true) != null) txtIso.Text = settings.Iso; }, true));
 
+            cmbChannel.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbChannel.Items.AddRange(new object[] { "Stable: the releases (recommended)", "Development: the newest changes on main" });
+            cmbChannel.SelectedIndex = Channel.Development ? 1 : 0;
+            cmbChannel.SelectedIndexChanged += (s, e) => ChangeChannel(cmbChannel.SelectedIndex == 1);
+            AddRow(t, "Update channel", cmbChannel, new Label
+            {
+                Text = "(the same setting as the game's Options > Advanced > Update Channel)", AutoSize = true, Anchor = AnchorStyles.Left,
+                ForeColor = SystemColors.GrayText,
+            });
+
             cmbJobs.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbJobs.Items.AddRange(new object[] { "Automatic", "1 (slowest, the safest)", "2", "4", "8", "16" });
             var jobValues = new[] { 0, 1, 2, 4, 8, 16 };
@@ -280,7 +291,7 @@ namespace Rac1Launcher
             var note = new Label
             {
                 AutoSize = true, Anchor = AnchorStyles.Left | AnchorStyles.Right, Margin = Pd(0, 18, 0, 0), ForeColor = SystemColors.GrayText,
-                Text = "The game's own options (graphics, controls, the update channel) are in the game's Options menu. "
+                Text = "The game's own options (graphics, controls) are in the game's Options menu. "
                      + "Your settings and saves are in " + Settings.ConfigDir + ", not in the game folder: "
                      + "setting the game up again never touches them.",
             };
@@ -365,6 +376,7 @@ namespace Rac1Launcher
         void ShowState(State st, string due)
         {
             state = st;
+            cmbChannel.SelectedIndex = Channel.Development ? 1 : 0;  // (the game may have changed it)
             btnMain.Enabled = runner == null;
             var v = game.SourceVersion;
             switch (st)
@@ -386,7 +398,10 @@ namespace Rac1Launcher
                     break;
                 case State.Ready:
                     lblStatus.Text = "Ready to play";
-                    lblDetail.Text = "Version " + VersionText(v) + (game.IsGitClone ? " (a git clone)" : "") + ", in " + game.Dir;
+                    string commit = game.InstalledCommit;
+                    lblDetail.Text = "Version " + VersionText(v)
+                                   + (commit != null ? $" (development: main at {commit.Substring(0, Math.Min(7, commit.Length))})" : "")
+                                   + (game.IsGitClone ? " (a git clone)" : "") + ", in " + game.Dir;
                     btnMain.Text = "Play";
                     break;
             }
@@ -395,11 +410,52 @@ namespace Rac1Launcher
 
         void ShowUpdate()
         {
+            if (runner != null) return;
+            string msg = UpdateMessage();
+            updatePanel.Visible = msg != null && game.Downloaded;
+            if (msg != null) lblUpdate.Text = msg + " The update keeps your saves and settings.";
+        }
+
+        /// <summary>What is newer on the chosen channel than what is installed, or null (nothing newer, or not known).
+        /// Stable: a release newer than the sources' version. Development: main, when it moved since the commit the last
+        /// download unpacked (a stable install on the development channel: main is always newer).</summary>
+        string UpdateMessage()
+        {
             var v = game.SourceVersion;
-            bool newer = latest?.Version != null && v != null && latest.Version > v && game.Downloaded;
-            updatePanel.Visible = newer;
-            if (newer)
-                lblUpdate.Text = $"Version {VersionText(latest.Version)} is out (you have {VersionText(v)}). The update keeps your saves and settings.";
+            if (Channel.Development)
+            {
+                if (mainCommit == null || game.IsGitClone && game.InstalledCommit == null) return null;
+                string have = game.InstalledCommit;
+                if (have == mainCommit) return null;
+                return have == null ? $"You are on the development channel: main ({mainCommit.Substring(0, 7)}) has the newest changes."
+                                    : $"There are new changes on main ({mainCommit.Substring(0, 7)}; you have {have.Substring(0, Math.Min(7, have.Length))}).";
+            }
+            if (latest?.Version != null && v != null && latest.Version > v)
+                return $"Version {VersionText(latest.Version)} is out (you have {VersionText(v)}).";
+            return null;
+        }
+
+        void ChangeChannel(bool development)
+        {
+            if (development == Channel.Development) return;
+            if (development && MessageBox.Show(this, "The development channel gets the newest changes on main, before they are released: "
+                                                   + "new fixes sooner, but also new bugs. The game's own Update Channel option changes too.\n\n"
+                                                   + "Switch to the development channel?", "Update channel", MessageBoxButtons.YesNo,
+                                               MessageBoxIcon.Question) != DialogResult.Yes)
+            {
+                cmbChannel.SelectedIndex = 0;
+                return;
+            }
+            try { Channel.Development = development; }
+            catch (Exception e)
+            {
+                MessageBox.Show(this, "The setting could not be saved: " + e.Message, "Update channel");
+                cmbChannel.SelectedIndex = Channel.Development ? 1 : 0;
+                return;
+            }
+            mainCommit = null;
+            ShowUpdate();
+            CheckUpdates(false);
         }
 
         void CheckUpdates(bool userAsked)
@@ -409,17 +465,24 @@ namespace Rac1Launcher
                 try
                 {
                     var r = GitHub.Latest();
+                    string main = Channel.Development ? GitHub.MainCommit() : null;
                     string fresh = DownloadNewLauncher(r);
                     BeginInvoke((Action)(() =>
                     {
                         latest = r;
+                        if (main != null) mainCommit = main;
                         ShowUpdate();
                         if (fresh != null && SwapLauncher(fresh)) return;
                         if (userAsked)
                         {
                             var v = game.SourceVersion;
-                            string msg = !game.Downloaded ? $"The latest version is {r.Tag}: Install gets it."
-                                : r.Version != null && v != null && r.Version > v ? $"Version {r.Tag} is out (you have {VersionText(v)}): use Update on the Play page."
+                            string newer = UpdateMessage();
+                            string msg = !game.Downloaded ? (main != null ? $"Install gets main ({main.Substring(0, 7)})."
+                                                                          : $"The latest version is {r.Tag}: Install gets it.")
+                                : newer != null ? newer + " Use Update on the Play page."
+                                : main != null && game.IsGitClone && game.InstalledCommit == null
+                                    ? $"This folder is a git clone: Update brings it to main's newest changes ({main.Substring(0, 7)})."
+                                : main != null ? $"You have the newest changes on main ({main.Substring(0, 7)})."
                                 : $"You have the latest version ({VersionText(v)}).";
                             MessageBox.Show(this, msg, "Updates", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         }
@@ -556,26 +619,44 @@ namespace Rac1Launcher
             });
         }
 
-        /// <summary>The latest release's source zip, unpacked into the game folder.</summary>
+        /// <summary>The source zip of the chosen channel (the latest release, or main), unpacked into the game folder.</summary>
         bool Download(Runner r)
         {
             Step("Finding the latest version");
-            GitHub.Release rel;
-            try { rel = latest ?? GitHub.Latest(); }
-            catch (Exception e) { Fail("GitHub could not be reached (" + e.Message + "). Check the internet connection, then try again."); return false; }
-            latest = rel;
-            string zip = Path.Combine(Path.GetTempPath(), $"rac1-native-{rel.Tag}.zip");
-            Step($"Downloading the game ({rel.Tag})");
-            Log($"Downloading {GitHub.Page}/archive/refs/tags/{rel.Tag}.zip");
+            string label, url;
+            string[] version;
             try
             {
-                GitHub.Download($"{GitHub.Page}/archive/refs/tags/{rel.Tag}.zip", zip, (done, total) =>
+                if (Channel.Development)
+                {
+                    string sha = GitHub.MainCommit();
+                    mainCommit = sha;
+                    label = "main " + sha.Substring(0, 7);
+                    url = $"{GitHub.Page}/archive/{sha}.zip";  // (that commit, even if main moves meanwhile)
+                    version = new[] { "describe " + sha.Substring(0, 7), "commit " + sha, "branch main" };
+                }
+                else
+                {
+                    var rel = latest ?? GitHub.Latest();
+                    latest = rel;
+                    label = rel.Tag;
+                    url = $"{GitHub.Page}/archive/refs/tags/{rel.Tag}.zip";
+                    version = new[] { "describe " + rel.Tag, "commit ", "branch " };
+                }
+            }
+            catch (Exception e) { Fail("GitHub could not be reached (" + e.Message + "). Check the internet connection, then try again."); return false; }
+            string zip = Path.Combine(Path.GetTempPath(), $"rac1-native-{label.Replace(' ', '-')}.zip");
+            Step($"Downloading the game ({label})");
+            Log($"Downloading {url}");
+            try
+            {
+                GitHub.Download(url, zip, (done, total) =>
                 {
                     if (total > 0) Progress((int)(done * 100 / total));
-                    StepDetail($"Downloading the game ({rel.Tag}): {done >> 20} MB");
+                    StepDetail($"Downloading the game ({label}): {done >> 20} MB");
                 }, cancel.Token);
                 Step("Unpacking");
-                Install.Unpack(zip, game.Dir, rel.Tag, Log);
+                Install.Unpack(zip, game.Dir, version, Log);
             }
             catch (OperationCanceledException) { return false; }
             catch (Exception e) { Fail("The download failed (" + e.Message + "). Check the internet connection, then try again."); return false; }
@@ -617,7 +698,7 @@ namespace Rac1Launcher
             string iso = AskIso();
             if (iso == null) return;
             tabs.SelectedIndex = 0;
-            RunTask("Updating", r => Setup(r, iso, "--update"));
+            RunTask("Updating", r => Setup(r, iso, "--update --channel " + Channel.Name));
         }
 
         /// <summary>What setup.cmd does: the tools (tools\windows\toolchain.ps1), then tools\setup.py.</summary>
@@ -638,7 +719,7 @@ namespace Rac1Launcher
             if (r.Cancelled) return false;
             if (rc != 0) { Fail(LastError() ?? "Preparing the tools failed."); return false; }
             RepairCertificates(r, g);
-            Step(extra == "--update" ? "Downloading the update" : "Starting the setup");
+            Step(extra.StartsWith("--update") ? "Downloading the update" : "Starting the setup");
             sawStepMarks = false;
 
             int jobs = settings.Jobs;
@@ -653,7 +734,7 @@ namespace Rac1Launcher
                 if (r.Cancelled) return false;
                 if (rc == 0) break;
                 // (Python itself crashed in a parallel job, GitHub issue #72: once more with one job at a time)
-                if (attempt == 0 && sawPythonCrash && jobs != 1 && extra != "--update")
+                if (attempt == 0 && sawPythonCrash && jobs != 1 && !extra.StartsWith("--update"))
                 {
                     Log("Python crashed while generating the code: trying again with one job at a time.");
                     jobs = 1;
@@ -750,6 +831,7 @@ namespace Rac1Launcher
                 Activate();
                 btnMain.Enabled = true;
                 ShowState(state, "");
+                CheckUpdates(false);  // (the channel may have changed in the game's options)
                 if (code != 0 && (DateTime.Now - started).TotalSeconds < 20)
                     MessageBox.Show(this, $"The game closed right after starting (exit code {code}). If it keeps happening, "
                                         + "try Settings > Set up again from scratch, or report it (Settings > Report a problem).",

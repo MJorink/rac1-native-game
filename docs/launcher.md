@@ -42,6 +42,13 @@ slot to the Recycle Bin.
   `C:\rac1-native` when that path has spaces or non-ASCII letters). Choose a folder that already has
   the game (a clone, or a zip set up with `setup.cmd`) to use it from the launcher.
 - **Disc image**: the `.iso` the setup uses.
+- **Update channel**: **Stable** gets the releases; **Development** gets the newest changes on
+  `main`, before they are released (new fixes sooner, and new bugs too). It is the same setting as
+  the game's Options > Advanced > Update Channel (the `update_channel` line of
+  `%APPDATA%\rac1-native\advanced_options.txt`): changing it in one changes it in the other. Install
+  and Update follow it: on Development, Install downloads `main` as it is now, the **Play** page
+  says when `main` has moved since, and Update gets it (`tools\setup.py --update --channel
+  development`). Back on Stable, the next Update goes to the latest release.
 - **Parallel jobs**: how many jobs the setup runs at once. Automatic is fine; 1 is the slowest and
   uses the least memory.
 - **Set up again from scratch**: generates everything again from the disc and rebuilds (the setup's
@@ -49,7 +56,7 @@ slot to the Recycle Bin.
 - **Open the setup's logs**: the `build\` folder, with `launcher.log` (everything the launcher ran
   and what it printed), `setup-build.log` and `setup-codegen.log`. Attach them to a bug report.
 
-The game's own settings (graphics, controls, the update channel) are in the game's Options menu.
+The game's other settings (graphics, controls) are in the game's Options menu.
 
 ## What it runs
 

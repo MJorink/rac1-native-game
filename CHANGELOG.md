@@ -8,7 +8,9 @@ What changed in each release. Releases are source only: you build the game with 
 ### Windows
 - **The launcher**, `rac1-launcher.exe`: one file to download and double-click, attached to each
   release. It downloads the game, sets it up from your disc image, updates it (and itself), starts
-  it, and backs up, restores and deletes saves. See [The launcher](docs/launcher.md).
+  it, and backs up, restores and deletes saves. It follows the update channel (stable releases, or
+  development: `main`), the same setting as the game's own. See [The launcher](docs/launcher.md).
+- The game no longer drops `RAC1_PYTHON`, which the setup sets for the game's setup mode.
 - The setup no longer fails downloading GLFW with "error adding trust anchors" when the game's
   folder has a space in its path (#79, #69, #63): MSYS2's certificate files, left empty by its
   CLANG64 tool there, are made again by `tools\windows\toolchain.ps1` (also on a setup made before).
