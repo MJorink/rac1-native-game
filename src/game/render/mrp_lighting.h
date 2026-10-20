@@ -75,6 +75,7 @@ struct ClassLight {
     float off[3] = {0.0f, 0.0f, 0.0f};
     float col[3] = {0.85f, 0.92f, 1.0f};
     float intensity = 1.0f, radius = 8.0f, flicker = 0.0f;
+    float down = 0.0f;  // (the share of the light aimed straight down, as a ceiling fixture's: 0 every way alike, 1 a downward Lambert lobe)
     bool on = true;
 };
 std::vector<ClassLight>& mrp_user_class_lights();
@@ -177,6 +178,7 @@ struct ShadowLocs {
     int pass = -1, on = -1, inv_view = -1, proj = -1, light = -1, cut = -1;
     int map = -1, casc = -1, cam = -1, sun = -1, param = -1, texel = -1, debug = -1;
     int pt_n = -1, pt_pos = -1, pt_col = -1;  // (the game's point lights per pixel)
+    int pt_down = -1;                        // (each light's share aimed down, four to a vector)
     int pt_map = -1, pt_near = -1;           // (their shadows: the cube maps, the near plane)
     int pt_tiles = -1, pt_vp = -1;           // (the screen tiles' lights, the view's world -> clip)
     int opaque = -1;                         // (the shadow pass: the batch is opaque - no blending -: its depth alone)
@@ -251,6 +253,7 @@ bool mrp_moby_caster_rect(const float* light_vp, float rect[4], const float* wit
     "uniform int uPtN;\n"                                                                               \
     "uniform vec4 uPtPos[96];\n"                                                                         \
     "uniform vec4 uPtCol[96];\n"                                                                         \
+    "uniform vec4 uPtDown[24];\n" /* per light (four to a vector) the share aimed down: a ceiling fixture's lobe */ \
     "uniform samplerCubeArrayShadow uPtMap;\n"                                                          \
     "uniform float uPtNear;\n"                                                                          \
     "uniform usampler2D uPtTiles;\n" /* per screen tile the lights reaching it (bits 0..63) */ \
@@ -334,10 +337,14 @@ bool mrp_moby_caster_rect(const float* light_vp, float rect[4], const float* wit
     "        float ndl_p = dot(sh_n, L) * inv_d;\n"                                                     \
     "        if (ndl_p <= 0.0) continue;\n"                                                             \
     "        float att = 1.0 - d / r;\n"                                                                \
+    /* aimed down (a ceiling fixture's tube or bulb): a Lambert lobe below the light, the falloff squared - a pool under it */ \
+    "        att = mix(att, att * att * max(L.z * inv_d, 0.0), uPtDown[i >> 2][i & 3]);\n"              \
     "        float sv = 1.0;\n"                                                                         \
     "        if (uPtCol[i].w >= 0.0) {\n" /* the cube (the integer part) and its shadow's weight (0.05..0.95: fading in or out) */ \
     "            float layer = floor(uPtCol[i].w), kw = clamp((fract(uPtCol[i].w) - 0.05) / 0.9, 0.0, 1.0);\n" \
-    "            vec3 v = vShWorld + sh_n * 0.04 - uPtPos[i].xyz;\n"                                    \
+    /* (off the surface by 0.04 + 3 % of the distance - some 8 of the cube's texels -: a moby lying flat on the floor - the round */ \
+    /* plate under Novalis's yellow press - put the whole floor around it in its shadow with 0.04 alone) */ \
+    "            vec3 v = vShWorld + sh_n * (0.04 + 0.03 * d) - uPtPos[i].xyz;\n"                       \
     "            float f = r, nn = uPtNear;\n"                                                          \
     "            vec3 a = abs(v);\n"                                                                    \
     "            float z = max(max(a.x, a.y), a.z);\n"                                                  \

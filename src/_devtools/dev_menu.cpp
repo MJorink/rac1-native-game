@@ -1205,9 +1205,10 @@ void tab_lights() {
             bool ch = false;
             ch |= ImGui::DragFloat3("Offset (its frame)", cl.off, 0.02f);
             ch |= ImGui::ColorEdit3("Colour##cl", cl.col);
-            ch |= ImGui::SliderFloat("Intensity##cl", &cl.intensity, 0.0f, 3.0f);
+            ch |= ImGui::SliderFloat("Intensity##cl", &cl.intensity, 0.0f, 6.0f);
             ch |= ImGui::SliderFloat("Radius##cl", &cl.radius, 1.0f, 30.0f);
             ch |= ImGui::SliderFloat("Flicker##cl", &cl.flicker, 0.0f, 1.0f);
+            ch |= ImGui::SliderFloat("Aimed down##cl", &cl.down, 0.0f, 1.0f);  // (a ceiling fixture: 1 all its light below it)
             ch |= ImGui::Checkbox("On##cl", &cl.on);
             if (ImGui::Button("Delete##cl")) {
                 C.erase(C.begin() + g_class_sel);
