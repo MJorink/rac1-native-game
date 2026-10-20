@@ -623,7 +623,9 @@ when a cascade is about to need them: when its slack is running out given the ca
 
 **Shading** (`sh_points` in the shader code of `mrp_lighting.h`): each light adds
 `colour * max(N · L, 0) * (1 - d / r) * 0.5 * shadow` to the pixel, with N the flat face normal from
-derivatives. This is the world only. Mobys keep the game's own 8 lights per vertex, as in the
+derivatives. A light per object class can be aimed down (`emit`'s last value, below): its falloff then
+becomes `(1 - d / r)^2` times the cosine of the angle below the light, mixed in by that share, so a
+ceiling fixture lights a pool on the floor under it and not the ceiling around it. This is the world only. Mobys keep the game's own 8 lights per vertex, as in the
 original, and are not lit by emitters or hand-placed lights.
 
 While any of the game's short-lived lights is active, the world's per-vertex colours on the GPU are not
@@ -644,7 +646,10 @@ With Dynamic Shadows on, up to 4 point lights cast shadows into a cube-map array
 32-bit float depth; `point_shadows_pass`). The game's own lights come first, nearest first; they
 are cast by the world and the mobys. Emitters and hand-placed lights fill the remaining cubes, but
 only when a moby is within their reach, and they are cast by mobys only. These fade in and out over 8 frames as cubes are
-reassigned. Sampling uses 4 taps.
+reassigned. Sampling uses 4 taps, from the surface moved off along its normal by 0.04 units plus 3 % of
+its distance to the light (about 8 of the cube's texels): with 0.04 alone a moby lying flat on the
+floor (the round plate under the yellow press in Novalis's neon-lit room) put the whole floor around it
+in its shadow, and the neon tubes there lit nothing on the floor.
 
 ## Shadow distance
 
@@ -733,12 +738,14 @@ part of the original. The editor is in the debug menu (Lights tab), so it needs 
 Placing lamps one by one is slow; most lamps are one object class repeated. A level's file can say
 
 ```
-emit <tie|shrub|moby> <class> <ox oy oz> <r g b> <intensity> <radius> [flicker]
+emit <tie|shrub|moby> <class> <ox oy oz> <r g b> <intensity> <radius> [flicker] [down]
 ```
 
 and every tie or shrub instance of that class, or every live moby of that class, lights as a point
 light at the offset in its own frame (a tie's or shrub's rows, model / 1024 at its scale; a moby's
-rotation, in world units), so a moby's lamp follows it. At the level's start the log says how many
+rotation, in world units), so a moby's lamp follows it. `down` (0 to 1, default 0) is the share of the
+light aimed straight down, as a ceiling fixture's: the squared falloff and the cosine below the light
+of [Point lights per pixel](#point-lights-per-pixel). At the level's start the log says how many
 instances each line found (`[lights] level 1: emit shrub 282: 7 instances`): none means a wrong
 class or kind. They go through the same path as the lights placed by hand:
 within 60 units of the camera, the nearest first and faded at the reach and at the cap (96 lights in
@@ -749,12 +756,15 @@ mesh around the light would hide it); a tie's may (cast by mobys only, as the em
 picture; the world point under it (the depth read there) and the objects at it - the tie instance
 whose model's box holds it, the shrub whose sphere holds it, the nearest moby within 6 units - with
 their class and the point in their frame; **Emit for every tie / shrub / moby of this class** adds a light at that point of every
-instance, live, then the offset, colour, intensity, radius and flicker are edited and Save writes
+instance, live, then the offset, colour, intensity, radius, flicker and the share aimed down are edited and Save writes
 the `emit` lines with the rest of the file.
 
 Shipped: Novalis's neon tubes in the buildings by the river (shrub class 282, the panel of the
-fixture shrub 167; the automatic search does not see white texels, nor shrubs and mobys), Oltanis's
-street lamps (moby class 1511, a cyan light in each globe). `RAC1_LAMP_SCAN` (testing) surveys what
+fixture shrub 167; the automatic search does not see white texels, nor shrubs and mobys; aimed down
+0.85, intensity 5, radius 13) and hanging bulbs (shrub class 281; down 0.6, 3.5, 12), Kerwan's
+street lamps (moby class 1827; down 0.5, 2.5, 9), Oltanis's street lamps (moby class 1511, a cyan
+light in each globe). The neons' first values (1.3, radius 11, every way alike) lit the walls next to
+the tube a little and the floor some 6 units below hardly at all against the game's painted light. `RAC1_LAMP_SCAN` (testing) surveys what
 glows on screen along a run, by class.
 
 

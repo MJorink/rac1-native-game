@@ -40,7 +40,9 @@ played through the game on it, and the launcher installs and updates it with a d
 - **Shadow Strength** (Options > Graphics, 50 to 100 %, default 70 %): how much of the sun a shadow
   hides.
 - **Lights per object class:** every object of a class can be a light, from the level's file:
-  Novalis's neon tubes and hanging bulbs, Kerwan's street lamps, Oltanis's plaza lamps.
+  Novalis's neon tubes and hanging bulbs, Kerwan's street lamps, Oltanis's plaza lamps. A lamp can
+  be aimed down (a pool of light on the floor under it): Novalis's neons now light the floor and the
+  walls below them, which a flat plate under the yellow press had put in its shadow, and were too weak.
 - **Sun Rays** (Options > Graphics: Off, Low, High): shafts of light from the sun through openings.
 - **Ambient Occlusion** has six values (Off, SSAO, SSAO+, HBAO, GTAO, GTAO at half resolution), and
   each mode is now visible and different (#75).

@@ -115,6 +115,7 @@ struct State {
     glm::vec3 key_dir{0.0f, 0.0f, 1.0f};  // toward the key light as the game lights with it (the sun's direction unless the level's file turns it)
     int npts = 0;                     // the frame's active point lights: position, radius; colour
     glm::vec4 pt_pos[kMaxPts], pt_col[kMaxPts];  // (pt_col.w: the light's cube in the shadow array, -1 none)
+    float pt_down[kMaxPts] = {};                 // (the share of each light aimed down - a lamp per class's -, 0 every way alike)
     int pt_slot[kMaxPts] = {};                   // (the game's slot of each: its casters' view, 3 + slot; -1 an automatic emitter; -2 a moby class's lamp: no shadow cube)
     uint64_t frame = 0;              // the far cascade's turn
     // the static world's cache per cascade: the cascade's box held still while the view's slice stays inside it (its
@@ -1837,11 +1838,12 @@ void user_load(int level) {
             g_interiors.push_back(b);
             continue;
         }
-        {  // "emit <tie|moby> <class> <ox oy oz> <r g b> <intensity> <radius> [flicker]"
+        {  // "emit <tie|moby> <class> <ox oy oz> <r g b> <intensity> <radius> [flicker] [down]"
             ClassLight cl;
             char kind[8] = {};
-            const int got = std::sscanf(line, "emit %7s %d %f %f %f %f %f %f %f %f %f", kind, &cl.o_class, &cl.off[0], &cl.off[1], &cl.off[2], &cl.col[0], &cl.col[1],
-                                        &cl.col[2], &cl.intensity, &cl.radius, &cl.flicker);
+            const int got = std::sscanf(line, "emit %7s %d %f %f %f %f %f %f %f %f %f %f", kind, &cl.o_class, &cl.off[0], &cl.off[1], &cl.off[2], &cl.col[0], &cl.col[1],
+                                        &cl.col[2], &cl.intensity, &cl.radius, &cl.flicker, &cl.down);
+            cl.down = std::clamp(cl.down, 0.0f, 1.0f);
             if (got >= 10 && (std::strcmp(kind, "tie") == 0 || std::strcmp(kind, "moby") == 0 || std::strcmp(kind, "shrub") == 0)) {
                 cl.moby = std::strcmp(kind, "moby") == 0;
                 cl.shrub = std::strcmp(kind, "shrub") == 0;
@@ -1954,8 +1956,8 @@ bool mrp_user_lights_save() {
     for (int n : g_interior_sets) std::fprintf(f, "interior_set %d\n", n);
     for (const ClassLight& cl : g_class_lights)
         if (cl.on)
-            std::fprintf(f, "emit %s %d  %.3f %.3f %.3f  %.3f %.3f %.3f  %.3f %.3f %.3f\n", cl.moby ? "moby" : cl.shrub ? "shrub" : "tie", cl.o_class, cl.off[0], cl.off[1], cl.off[2], cl.col[0],
-                         cl.col[1], cl.col[2], cl.intensity, cl.radius, cl.flicker);
+            std::fprintf(f, "emit %s %d  %.3f %.3f %.3f  %.3f %.3f %.3f  %.3f %.3f %.3f  %.2f\n", cl.moby ? "moby" : cl.shrub ? "shrub" : "tie", cl.o_class, cl.off[0], cl.off[1],
+                         cl.off[2], cl.col[0], cl.col[1], cl.col[2], cl.intensity, cl.radius, cl.flicker, cl.down);
     for (const SunInterior& b : g_interiors)
         std::fprintf(f, "interior %.1f %.1f %.1f  %.1f %.1f %.1f\n", b.lo[0], b.lo[1], b.lo[2], b.hi[0], b.hi[1], b.hi[2]);
     for (int c : g_user_noauto) std::fprintf(f, "noauto %d\n", c);
@@ -2251,7 +2253,16 @@ void class_lights_add(double t) {
                     for (uint32_t m = first; m != 0 && m < 0x01fe0000u && (last == 0 || m <= last) && lbu(m + 0x20) != 0xff; m += 0x100)
                         n += static_cast<int8_t>(lbu(m + 0x20)) >= 0 && lh(m + 0xa6) == cl.o_class ? 1 : 0;
                 } else {
-                    for (const TieSpot& t : mrp_world_tie_instances()) n += t.shrub == cl.shrub && t.o_class == cl.o_class ? 1 : 0;
+                    static const bool trace = std::getenv("RAC1_LIGHTS_TRACE") != nullptr;
+                    for (const TieSpot& t : mrp_world_tie_instances()) {
+                        if (t.shrub != cl.shrub || t.o_class != cl.o_class) continue;
+                        ++n;
+                        if (trace) {  // (testing: where each instance's light sits)
+                            glm::vec3 p(t.pos[0], t.pos[1], t.pos[2]);
+                            for (int r = 0; r < 3; ++r) p += glm::vec3(t.rows[r][0], t.rows[r][1], t.rows[r][2]) * cl.off[r];
+                            std::printf("[lights]   instance at %.2f %.2f %.2f: the light at %.2f %.2f %.2f\n", t.pos[0], t.pos[1], t.pos[2], p.x, p.y, p.z);
+                        }
+                    }
                 }
                 std::printf("[lights] level %d: emit %s %d: %d instances%s\n", level, cl.moby ? "moby" : cl.shrub ? "shrub" : "tie", cl.o_class, n,
                             cl.moby ? " (live now)" : "");
@@ -2326,6 +2337,7 @@ void class_lights_add(double t) {
         g_sh.pt_pos[g_sh.npts] = glm::vec4(c.p, cl.radius);
         g_sh.pt_col[g_sh.npts] = glm::vec4(cl.col[0] * f, cl.col[1] * f, cl.col[2] * f, -1.0f);
         g_sh.pt_slot[g_sh.npts] = cl.moby ? -2 : -1;  // (a moby's lamp: no shadow cube - its own mesh around the light would hide it)
+        g_sh.pt_down[g_sh.npts] = cl.down;
         ++g_sh.npts;
     }
     if (std::getenv("RAC1_LIGHTS_TRACE") != nullptr) {
@@ -2355,6 +2367,7 @@ void mrp_lighting_shadow_pass() {
     fit_cascades();
     // the game's dynamic point lights in use (0x1804c0 + 0x10) with a colour and a radius: lit per pixel this frame
     g_sh.npts = 0;
+    std::fill(std::begin(g_sh.pt_down), std::end(g_sh.pt_down), 0.0f);  // (every way alike but a lamp per class aimed down)
     for (uint32_t i = 0; i < 8 && g_modern_points != 0; ++i) {
         const uint32_t rec = OV(0x001802c0u) + i * 0x20, use = OV(0x001804c0u) + i * 0x30;
         if (lw(use + 0x10) == 0 || ((g_slot_old.load() >> i) & 1u) != 0) continue;  // (the level's own lights: the game's)
@@ -2694,6 +2707,7 @@ ShadowLocs mrp_lighting_locs(unsigned prog) {
     l.pt_n = glGetUniformLocation(p, "uPtN");
     l.pt_pos = glGetUniformLocation(p, "uPtPos");
     l.pt_col = glGetUniformLocation(p, "uPtCol");
+    l.pt_down = glGetUniformLocation(p, "uPtDown");
     l.pt_map = glGetUniformLocation(p, "uPtMap");
     l.pt_near = glGetUniformLocation(p, "uPtNear");
     l.opaque = glGetUniformLocation(p, "uShOpaque");
@@ -2754,6 +2768,7 @@ void mrp_lighting_bind_receiver(const ShadowLocs& l, bool sky) {
     if (g_sh.npts > 0) {
         glUniform4fv(l.pt_pos, g_sh.npts, glm::value_ptr(g_sh.pt_pos[0]));
         glUniform4fv(l.pt_col, g_sh.npts, glm::value_ptr(g_sh.pt_col[0]));
+        glUniform4fv(l.pt_down, (g_sh.npts + 3) / 4, g_sh.pt_down);
     }
 }
 
