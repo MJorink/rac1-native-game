@@ -601,7 +601,7 @@ void draw(const Gs& gs, int win_w, int win_h, float FB_W, float FB_H, const Dept
         // the overscan crop asked: the projected 3D found in 4:3 too (it is not cut, only the 2D is)
         const bool crop_on = !to_rt && (v.crop[0] | v.crop[1] | v.crop[2] | v.crop[3]) != 0;
         bool proj3d = false;
-        if (!to_rt && (v.xscale_3d != v.xscale || v.xscale < 1.0f || crop_on)) {  // (also to let the 3D past the frame's sides)
+        if (!to_rt && (v.xscale_3d != v.xscale || v.xscale < 1.0f || crop_on || v.hide_edge_slivers)) {  // (also to let the 3D past the frame's sides)
             proj3d = p.vu;
             if (!proj3d && depth != nullptr && field(st.test, 16, 1) != 0 && ztst >= 2)
                 for (const Vertex& q : p.v) {
@@ -791,6 +791,18 @@ void draw(const Gs& gs, int win_w, int win_h, float FB_W, float FB_H, const Dept
         k.zwrite = ztest && field(st.zbuf, 32, 1) == 0;
         int x0 = static_cast<int>(field(st.scissor, 0, 11)), x1 = static_cast<int>(field(st.scissor, 16, 11));
         int y0 = static_cast<int>(field(st.scissor, 32, 11)), y1 = static_cast<int>(field(st.scissor, 48, 11));
+        // the 2D slivers at the frame's edges (Viewport::hide_edge_slivers): at most 4 frame pixels inside, the rest outside
+        if (v.hide_edge_slivers && !to_rt && tme && !crop_3d && !p.vu && !p.wide) {
+            float bx0 = verts[0].x, bx1 = bx0, by0 = verts[0].y, by1 = by0;
+            for (const V& q : verts) {
+                bx0 = std::min(bx0, q.x);
+                bx1 = std::max(bx1, q.x);
+                by0 = std::min(by0, q.y);
+                by1 = std::max(by1, q.y);
+            }
+            constexpr float kSliver = 4.0f;
+            if ((bx1 > FB_W + 0.5f && bx0 >= FB_W - kSliver) || (bx0 < -0.5f && bx1 <= kSliver) || (by0 < -0.5f && by1 <= kSliver)) continue;
+        }
         // the overscan crop: the 2D's scissor narrowed to the area a TV showed (nothing drawn when it is outside)
         if (crop_on && !crop_3d && !p.vu && !p.wide && !full_span && !edge_fill) {
             const int cw = static_cast<int>(FB_W), ch = static_cast<int>(FB_H);

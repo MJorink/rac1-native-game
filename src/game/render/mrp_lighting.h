@@ -2,7 +2,7 @@
 // real shadows of the sun cast by the world (tfrag, tie, shrub: the foliage with its alpha cut-outs) and the mobys onto the world and
 // the mobys, by cascaded shadow maps. Host code: none of it is the game's, and none of it changes the game's state (it only reads
 // the frame the MRP draws). Off by default (the original's lighting, the reference); on, the original's drop shadows (mrp_shadows.h)
-// are not drawn: the mobys cast their own.
+// are never drawn (the game still makes them): the mobys cast their own where there is a sun.
 //
 // How it plugs into the MRP (ADR 0010, "lighting / shadow modules"):
 //  - every MRP vertex shader (world CPU / tfrag path, world GPU path, mobys) ends its world-projection branch with `sh_clip(clip)`:
@@ -37,11 +37,10 @@ extern int g_auto_lights;
 // orig: (host) how far from the camera the mobys cast into the sun's shadows, units (0: as far as the cascades reach;
 // RAC1_SHADOW_MOBY_DIST; Options > Graphics > Shadow Distance)
 extern float g_shadow_moby_dist;
-// orig: (host) the shadows of far casters lighter (1, default; RAC1_SHADOW_FADE=0: as dark as the near ones' - the sun's
-// light scattered around a tall caster far away)
-extern int g_shadow_fade;
 // orig: (host) ambient occlusion on the 3D (screen space, from the depth; 0 off, the default; RAC1_AO; Options > Graphics)
 extern int g_ao;
+// orig: (host) the sun's rays (light shafts, screen space): 0 off (default), 1 Low, 2 High (RAC1_SUN_RAYS; Options > Graphics > Sun Rays)
+extern int g_sun_rays;
 // orig: (host) the ambient occlusion over this frame's 3D (after the MRP world and mobys, before the effects and the 2D;
 // the framebuffer they were drawn into bound): nothing unless the modern lighting drew this frame and g_ao is on
 void mrp_lighting_ao_pass();
@@ -65,6 +64,55 @@ void mrp_user_lights_reload();
 const char* mrp_user_lights_path();
 // orig: (host) the debug menu's selected light (-1 none): it pulses, so that it is found
 extern int g_user_light_selected;
+// orig: (host) the level's lights per object class ("emit <tie|shrub|moby> <class> <ox oy oz> <r g b> <intensity> <radius> [flicker]" in its
+// file; our data): every instance of that tie class, or every live moby of that class, lights as a point light at the offset turned
+// with it (the instance's rows / the moby's matrix; world units at the object's scale), through the same per-pixel path as the
+// lights placed by hand (within reach of the camera, the nearest first, at most the shaders' count; Secondary Lights: All)
+struct ClassLight {
+    bool moby = false;
+    bool shrub = false;  // (a shrub class: its instances as a tie's)
+    int o_class = 0;
+    float off[3] = {0.0f, 0.0f, 0.0f};
+    float col[3] = {0.85f, 0.92f, 1.0f};
+    float intensity = 1.0f, radius = 8.0f, flicker = 0.0f;
+    bool on = true;
+};
+std::vector<ClassLight>& mrp_user_class_lights();
+// orig: (host) the objects at a world point (the debug menu's crosshair: the depth there): the tie instance whose model's box holds
+// it (the smallest), the nearest live moby within 6 units; each with its class and the point in its own frame (an "emit" offset)
+struct LightPick {
+    bool tie = false, moby = false, shrub = false;
+    int tie_class = 0, moby_class = 0, shrub_class = 0;
+    float tie_off[3] = {0.0f, 0.0f, 0.0f}, moby_off[3] = {0.0f, 0.0f, 0.0f}, shrub_off[3] = {0.0f, 0.0f, 0.0f};
+    float moby_dist = 0.0f;
+};
+LightPick mrp_lighting_pick(const float p[3]);
+// orig: (host) the world point under a point of the 3D's view (u, v: 0..1 from the bottom left; the debug menu's crosshair): asked
+// for the next frames, the last one read (false: the sky or nothing yet)
+bool mrp_lighting_screen_point(float u, float v, float out[3]);
+// orig: (host) the debug menu's selected class (-1 none): its lights pulse
+extern int g_class_light_selected;
+// orig: (host) the level's own sun ("sun <azimuth> <elevation>" in its file, degrees; azimuth from +x toward +y, the direction
+// toward the sun): the game's key light's direction replaced where the game has a sun, its colour and weight kept, and its own
+// direction still the one a shadow takes the key light's term off with. Our data, not the game's: where the key light's direction
+// leaves the places the player walks in the permanent shade of the level's walls (Novalis's start). True when set
+bool mrp_user_sun(float* az, float* el);
+void mrp_user_sun_set(bool on, float az, float el);
+// orig: (host) the rotation (column-major 3x3) taking the game's key light's direction to the sun's, true when the modern lighting is
+// on and the level's file turns the sun (the mobys' light records are turned with it: mrp_moby_renderer.cpp)
+bool mrp_lighting_sun_turn(float r[9]);
+// orig: (host) the level's interiors (its file: "interior x0 y0 z0 x1 y1 z1" boxes, "interior_set <n>" light sets; our data): where the
+// camera is in one of the boxes, or the hero is lit with one of the sets, the sun is off and the picture is the original's lighting
+// (faded over about 0.3 s): caves, closed rooms, ships' holds. Edited by the debug menu's Sun tab, saved with the level's file
+struct SunInterior {
+    float lo[3] = {0.0f, 0.0f, 0.0f}, hi[3] = {0.0f, 0.0f, 0.0f};
+};
+std::vector<SunInterior>& mrp_user_interiors();
+std::vector<int>& mrp_user_interior_sets();
+// orig: (host) how much the camera is inside an interior (0 .. 1, faded), and the hero's light set now
+float mrp_lighting_interior(int* hero_set);
+// orig: (host) the game's key light's direction as the shadows last used it (azimuth, elevation, degrees)
+void mrp_lighting_game_sun(float* az, float* el);
 // orig: (host) the tie classes whose automatic emitters the level's file turns off ("noauto <class>"), and on again
 bool mrp_user_lights_class_off(int o_class);
 void mrp_user_lights_class_set_off(int o_class, bool off);
@@ -77,6 +125,17 @@ struct EmitterClass {
     bool material = false;
 };
 std::vector<EmitterClass> mrp_world_emitter_classes();
+// orig: (host) the level's tie instances (their class, position and rows - a model unit / 1024 is a world unit at scale 1), made
+// once per level from its tables (mrp_world_renderer.cpp)
+struct TieSpot {
+    int o_class = 0;
+    float pos[3] = {0.0f, 0.0f, 0.0f};
+    float rows[3][3] = {};
+    float lo[3] = {0.0f, 0.0f, 0.0f}, hi[3] = {0.0f, 0.0f, 0.0f};  // (the class's model's box, in the rows' units: model / 1024)
+    bool shrub = false;                    // (a shrub instance: no box, its bounding sphere)
+    float sphere[4] = {0.0f, 0.0f, 0.0f, 0.0f};  // (world centre, radius)
+};
+const std::vector<TieSpot>& mrp_world_tie_instances();
 // orig: (host) the automatic emitters made again (a class turned on or off)
 void mrp_world_emitters_rebuild();
 // orig: (host) the automatic emitters within `reach` of `cam` (their sphere's edge), the nearest first, at most `max`: position +
@@ -110,8 +169,6 @@ float mrp_lighting_caster_grow();
 // orig: (host) whether the next frame's casters outside the view are wanted (read on the scene's worker): a cached cascade
 // near its box's edge or drawn without them, or the cache off; the game's point lights' shadows want them besides (their slots)
 bool mrp_lighting_casters_wanted();
-// orig: (host) whether the level has a sun (its key light from above): else no sun's shadows, the game's drop shadows kept
-bool mrp_lighting_has_sun();
 // orig: (host) whether this frame's casters outside the view were made (mrp_world_renderer.cpp)
 bool mrp_world_casters_built();
 
@@ -124,8 +181,9 @@ struct ShadowLocs {
     int pt_tiles = -1, pt_vp = -1;           // (the screen tiles' lights, the view's world -> clip)
     int opaque = -1;                         // (the shadow pass: the batch is opaque - no blending -: its depth alone)
     int part = -1;                           // (the cascades' squares' share of their layer)
-    int depth = -1, range = -1, fade = -1;   // (the maps' depths, the cascades' ranges, the far casters' fade)
     int sun_k = -1;                          // (the sun's shadows' weight)
+    int key = -1, key_dir = -1;              // (the key light's colour and back factor, its direction: the world's shadows)
+    int strength = -1;                       // (the shadows' strength)
 };
 // orig: (host) the locations of a linked program
 ShadowLocs mrp_lighting_locs(unsigned prog);
@@ -183,10 +241,11 @@ bool mrp_moby_caster_rect(const float* light_vp, float rect[4], const float* wit
     "uniform vec4 uShParam;\n" /* x strength, y count, z the cascades' blend band, w the PCF radius */ \
     "uniform vec3 uShTexel;\n" /* the cascades' texel in world units */                                \
     "#if defined(SH_POINTS) || defined(SH_SPLIT)\n" /* (the lighting's variants only) */     \
-    "uniform sampler2DArray uShDepth;\n" /* the same maps, their depths (no compare) */                 \
-    "uniform vec3 uShRange;\n"           /* the cascades' depth ranges, units */                         \
-    "uniform vec4 uShFade;\n"            /* far casters: from, to (units), the shadow kept, on */        \
     "uniform float uShSunK;\n"           /* the sun's shadows' weight (the zone's light; faded) */      \
+    "uniform vec4 uShKey;\n"             /* the key light's colour (x 128 / 255) and back factor; w < 0: none */ \
+    "uniform vec3 uShKeyDir;\n"          /* toward the key light as the game lights with it (the sun may be turned) */ \
+    "uniform float uShStrength;\n"       /* the shadows' strength: the share of the key light a shadow hides (Options) */ \
+    "float sh_vis = 1.0;\n"              /* the sun's visibility (the strength applied), the zone's weight not applied */ \
     "#endif\n"                                                                                          \
     "uniform int uShDebug;\n"                                                                           \
     "uniform int uPtN;\n"                                                                               \
@@ -248,23 +307,9 @@ bool mrp_moby_caster_rect(const float* light_vp, float rect[4], const float* wit
     "        }\n"                                                                                       \
     "        break;\n"                                                                                  \
     "    }\n"                                                                                           \
-    "#if defined(SH_POINTS) || defined(SH_SPLIT)\n"                                                    \
-    "    if (uShFade.w > 0.0 && casc >= 0 && vis < 1.0) {\n" /* a far caster's shadow lighter: 5-tap cross blocker depth */ \
-    "        vec3 p = vShWorld + n * (uShTexel[casc] * 1.5) + uShSun * uShTexel[casc];\n"              \
-    "        vec4 q = uShCasc[casc] * vec4(p, 1.0);\n"                                                 \
-    "        float r = 3.0 / float(textureSize(uShDepth, 0).x) / uShPart[casc];\n"                    \
-    "        float sum = 0.0, cnt = 0.0;\n"                                                             \
-    "        const vec2 offs[5] = vec2[5](vec2(0.0, 0.0), vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(-1.0, 1.0), vec2(1.0, 1.0));\n" \
-    "        for (int i = 0; i < 5; ++i) {\n"                                                           \
-    "            float b = texture(uShDepth, vec3((q.xy + offs[i] * r) * uShPart[casc], float(casc))).r;\n" \
-    "            if (b < q.z - 0.0005) { sum += b; cnt += 1.0; }\n"                                    \
-    "        }\n"                                                                                       \
-    "        if (cnt > 0.0) {\n"                                                                        \
-    "            float d = (q.z - sum / cnt) * uShRange[casc];\n"                                       \
-    "            float keep = mix(1.0, uShFade.z, smoothstep(uShFade.x, uShFade.y, d));\n"              \
-    "            vis = 1.0 - (1.0 - vis) * keep;\n"                                                     \
-    "        }\n"                                                                                       \
-    "    }\n"                                                                                           \
+    "#if defined(SH_POINTS) || defined(SH_SPLIT)\n" /* one strength whatever blocks the sun, near or far: lit or not */ \
+    "    vis = 1.0 - (1.0 - vis) * uShStrength;\n"                                                    \
+    "    sh_vis = vis;\n"                                                                              \
     "    vis = 1.0 - (1.0 - vis) * uShSunK;\n"                                                         \
     "#endif\n"                                                                                          \
     "    sh_state = vec4(vis, facing, float(casc), 1.0);\n"                                             \
@@ -319,6 +364,13 @@ bool mrp_moby_caster_rect(const float* light_vp, float rect[4], const float* wit
     "    if (uShDebug == 2) return vec3(sh_state.x * max(sh_state.y, 0.15));\n"                         \
     "    float k = 1.0 - uShParam.x * (1.0 - sh_state.x) * sh_state.y;\n"                               \
     "    vec3 o = c * k;\n"                                                                             \
+    "#ifdef SH_POINTS\n" /* the world relit by our sun: the game's key light term (base + colour max(n.l, k n.l)) taken off, */ \
+    "    if (uShKey.w >= 0.0) {\n" /* the same light's term from the sun's direction, times its visibility, put back */ \
+    "        float ndg = dot(sh_n, uShKeyDir), nds = dot(sh_n, uShSun);\n"                             \
+    "        vec3 kg = uShKey.rgb * max(ndg, uShKey.w * ndg), ks = uShKey.rgb * max(nds, uShKey.w * nds);\n" \
+    "        o = max(c + uShSunK * (ks * sh_vis - kg), vec3(0.0));\n"                                  \
+    "    }\n"                                                                                          \
+    "#endif\n"                                                                                         \
     "    if (uShDebug == 1) {\n"                                                                        \
     "        int ci = int(sh_state.z);\n"                                                               \
     "        vec3 tint = ci == 0 ? vec3(1.0, 0.6, 0.6) : ci == 1 ? vec3(0.6, 1.0, 0.6) : ci == 2 ? vec3(0.6, 0.6, 1.0) : vec3(1.0);\n" \

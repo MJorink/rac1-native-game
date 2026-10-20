@@ -18,7 +18,7 @@ Player::Player() : mVmanager(mSynth) {}
 
 Player::~Player() = default;
 
-void Player::Tick(s16Output* stream, int samples) {
+void Player::Tick(s16Output* stream, int samples, s16* multi, int channels) {
   std::scoped_lock lock(mTickLock);
   int& htick = mHTick;  // rac1: the player's own (two players: the game's IOP and the host's mirror)
   int& stick = mSTick;
@@ -49,7 +49,10 @@ void Player::Tick(s16Output* stream, int samples) {
 
     stick++;
     htick++;
-    *stream++ = mSynth.Tick();
+    *stream++ = mSynth.Tick(multi, channels);
+    if (multi != nullptr) {
+      multi += channels;
+    }
   }
 }
 

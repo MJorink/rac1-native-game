@@ -65,7 +65,10 @@ class VoiceManager {
                       int tone_pan);
 
   void SetMasterVol(u8 group, s32 volume);
-  void SetPlaybackMode(s32 mode) { mStereoOrMono = mode; }
+  void SetPlaybackMode(s32 mode) {
+    mStereoOrMono = mode;
+    mSynth.SetMono(mode == 1);  // rac1: (host) the 5.1 / 7.1 placement off in mono
+  }
   s16 AdjustVolToGroup(s16 involume, int group);
 
  private:

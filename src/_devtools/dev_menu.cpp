@@ -886,6 +886,7 @@ int g_light_sel = -1;
 int g_light_level = -1;
 bool g_light_markers = true;
 bool g_light_dirty = false;
+int g_class_sel = -1;  // (the lights per object class: the selected one)
 void lights_markers(const std::vector<UserLight>& L) {
     int vp[4];
     if (!mrp_world_last_viewport(vp) || g_window == nullptr) return;
@@ -914,6 +915,145 @@ void lights_markers(const std::vector<UserLight>& L) {
         std::snprintf(t, sizeof t, "%zu", i);
         dl->AddText(ImVec2(p.x + 9.0f, p.y - 8.0f), IM_COL32(255, 255, 255, 230), t);
     }
+}
+// The sun editor: the level's own sun direction (data/lights/levelNN.txt, "sun <azimuth> <elevation>"), applied at once while
+// playing; Save writes the level's file (its comments, the lights placed by hand and the classes turned off kept)
+bool g_sun_dirty = false;
+int g_sun_level = -1;
+bool g_interior_show = true;
+int g_interior_sel = -1;
+// the interiors' boxes drawn over the picture (their edges projected with the world's view), the selected one white
+void interior_boxes(const std::vector<SunInterior>& B) {
+    int vp[4];
+    if (!mrp_world_last_viewport(vp) || g_window == nullptr) return;
+    float m[16];
+    mrp_world_view_proj(m);
+    const glm::mat4 VP = glm::make_mat4(m);
+    int fw = 0, fh = 0;
+    glfwGetFramebufferSize(g_window, &fw, &fh);
+    const ImGuiIO& io = ImGui::GetIO();
+    const float rs = graphics_render_scale() > 0.0f ? graphics_render_scale() : 1.0f;
+    const float sx = io.DisplayFramebufferScale.x > 0.0f ? io.DisplayFramebufferScale.x : 1.0f, sy = io.DisplayFramebufferScale.y > 0.0f ? io.DisplayFramebufferScale.y : 1.0f;
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    auto proj = [&](const glm::vec3& w, ImVec2& p) {
+        const glm::vec4 c = VP * glm::vec4(w, 1.0f);
+        if (c.w < 0.05f) return false;
+        const float x = (static_cast<float>(vp[0]) + (c.x / c.w * 0.5f + 0.5f) * static_cast<float>(vp[2])) / rs;
+        const float yb = (static_cast<float>(vp[1]) + (c.y / c.w * 0.5f + 0.5f) * static_cast<float>(vp[3])) / rs;
+        p = ImVec2(x / sx, (static_cast<float>(fh) - yb) / sy);
+        return true;
+    };
+    for (size_t i = 0; i < B.size(); ++i) {
+        glm::vec3 c[8];
+        for (int k = 0; k < 8; ++k) c[k] = glm::vec3(k & 1 ? B[i].hi[0] : B[i].lo[0], k & 2 ? B[i].hi[1] : B[i].lo[1], k & 4 ? B[i].hi[2] : B[i].lo[2]);
+        const ImU32 col = static_cast<int>(i) == g_interior_sel ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 160, 40, 220);
+        for (int a = 0; a < 8; ++a)
+            for (int bit = 1; bit < 8; bit <<= 1) {
+                const int b = a | bit;
+                if (b == a) continue;
+                ImVec2 p0, p1;
+                if (proj(c[a], p0) && proj(c[b], p1)) dl->AddLine(p0, p1, col, 2.0f);
+            }
+    }
+}
+void tab_sun() {
+    const int level = mrp_user_lights_level();
+    if (level != g_sun_level) {
+        g_sun_level = level;
+        g_sun_dirty = false;
+    }
+    if (level < 0 || g_modern_shadows == 0) {
+        ImGui::TextWrapped("The sun is the modern lighting's: Options > Graphics > Lighting (not Original).");
+        if (level < 0) return;
+    }
+    float az = 0.0f, el = 45.0f, gaz = 0.0f, gel = 0.0f;
+    bool own = mrp_user_sun(&az, &el);
+    mrp_lighting_game_sun(&gaz, &gel);
+    ImGui::Text("Level %d%s   %s", level, g_sun_dirty ? " (not saved)" : "", mrp_user_lights_path());
+    ImGui::Text("The game's key light: azimuth %.1f, elevation %.1f degrees (toward the light; azimuth from +x toward +y)", gaz, gel);
+    bool use_game = !own;
+    bool ch = false;
+    if (ImGui::Checkbox("Use the game's key light", &use_game)) {
+        if (!use_game && !own) {  // (starting from the game's own)
+            az = gaz;
+            el = gel;
+        }
+        own = !use_game;
+        ch = true;
+    }
+    if (own) {
+        ch |= ImGui::SliderFloat("Azimuth (yaw)", &az, -180.0f, 180.0f, "%.1f deg");
+        ch |= ImGui::SliderFloat("Elevation (pitch)", &el, 5.0f, 90.0f, "%.1f deg");
+    }
+    if (ch) {
+        mrp_user_sun_set(own, az, el);
+        g_sun_dirty = true;
+    }
+    if (ImGui::Button("Save")) g_sun_dirty = !mrp_user_lights_save();
+    ImGui::SameLine();
+    if (ImGui::Button("Reload")) {
+        mrp_user_lights_reload();
+        g_sun_dirty = false;
+    }
+    ImGui::TextWrapped("Applied at once (the shadow maps are drawn again for the new sun). Only where the game has a sun: its "
+                       "colour and weight are the game's, and a shadow still takes off the key light's term the game lit with. "
+                       "Save writes the whole level file (the Lights tab's unsaved edits too).");
+    // the level's interiors: boxes (the camera inside: the sun off) and light sets (the hero lit with one: the sun off)
+    ImGui::Separator();
+    int hero_set = -1;
+    const float in = mrp_lighting_interior(&hero_set);
+    std::vector<SunInterior>& B = mrp_user_interiors();
+    std::vector<int>& sets = mrp_user_interior_sets();
+    const glm::mat4 iv = glm::inverse(render_view_matrix());
+    const glm::vec3 cam(iv[3][0], iv[3][1], iv[3][2]);
+    ImGui::Text("Interiors (the sun off: the original's look). Camera %.1f %.1f %.1f, inside %.2f; the hero's light set %d", cam.x, cam.y, cam.z, in, hero_set);
+    ImGui::Checkbox("Show the boxes", &g_interior_show);
+    if (ImGui::Button("Add a box around the camera")) {
+        SunInterior b;
+        for (int i = 0; i < 3; ++i) {
+            const float r = i == 2 ? 4.0f : 8.0f;
+            b.lo[i] = cam[i] - r;
+            b.hi[i] = cam[i] + r;
+        }
+        B.push_back(b);
+        g_interior_sel = static_cast<int>(B.size()) - 1;
+        g_sun_dirty = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Add the hero's light set") && hero_set >= 0 && std::find(sets.begin(), sets.end(), hero_set) == sets.end()) {
+        sets.push_back(hero_set);
+        g_sun_dirty = true;
+    }
+    for (size_t i = 0; i < sets.size(); ++i) {
+        ImGui::PushID(static_cast<int>(1000 + i));
+        ImGui::Text("light set %d", sets[i]);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("remove")) {
+            sets.erase(sets.begin() + static_cast<std::ptrdiff_t>(i));
+            g_sun_dirty = true;
+            ImGui::PopID();
+            break;
+        }
+        ImGui::PopID();
+    }
+    if (g_interior_sel >= static_cast<int>(B.size())) g_interior_sel = -1;
+    for (size_t i = 0; i < B.size(); ++i) {
+        char t[96];
+        std::snprintf(t, sizeof t, "box %zu  %.1f %.1f %.1f .. %.1f %.1f %.1f", i, B[i].lo[0], B[i].lo[1], B[i].lo[2], B[i].hi[0], B[i].hi[1], B[i].hi[2]);
+        if (ImGui::Selectable(t, static_cast<int>(i) == g_interior_sel)) g_interior_sel = static_cast<int>(i);
+    }
+    if (g_interior_sel >= 0) {
+        SunInterior& b = B[static_cast<size_t>(g_interior_sel)];
+        bool ch = ImGui::DragFloat3("Min", b.lo, 0.1f);
+        ch |= ImGui::DragFloat3("Max", b.hi, 0.1f);
+        if (ImGui::Button("Delete the box")) {
+            B.erase(B.begin() + g_interior_sel);
+            g_interior_sel = -1;
+            ch = true;
+        }
+        if (ch) g_sun_dirty = true;
+    }
+    if (g_interior_show) interior_boxes(B);
 }
 void tab_lights() {
     std::vector<UserLight>& L = mrp_user_lights();
@@ -1008,6 +1148,77 @@ void tab_lights() {
             }
         }
     }
+    if (ImGui::CollapsingHeader("Lights per object class (emit)", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // the object under the crosshair (the 3D's centre: its depth, read each frame while this is open): a tie instance whose model's
+        // box holds the point, the nearest moby; "emit for this class" puts a light at that point of every instance of the class
+        std::vector<ClassLight>& C = mrp_user_class_lights();
+        float wp[3] = {0.0f, 0.0f, 0.0f};
+        const bool hit = mrp_lighting_screen_point(0.5f, 0.5f, wp);
+        if (ImGuiViewport* v = ImGui::GetMainViewport()) {  // (the crosshair: the window's centre)
+            const ImVec2 c(v->Pos.x + v->Size.x * 0.5f, v->Pos.y + v->Size.y * 0.5f);
+            ImDrawList* dl = ImGui::GetForegroundDrawList();
+            dl->AddLine(ImVec2(c.x - 10.0f, c.y), ImVec2(c.x + 10.0f, c.y), IM_COL32(255, 255, 255, 220), 2.0f);
+            dl->AddLine(ImVec2(c.x, c.y - 10.0f), ImVec2(c.x, c.y + 10.0f), IM_COL32(255, 255, 255, 220), 2.0f);
+        }
+        if (!hit) {
+            ImGui::TextDisabled("Crosshair: nothing (the sky, or the lighting off)");
+        } else {
+            const LightPick pk = mrp_lighting_pick(wp);
+            ImGui::Text("Crosshair at %.2f %.2f %.2f", wp[0], wp[1], wp[2]);
+            auto emit = [&](bool moby, int cls, const float off[3], bool shrub = false) {
+                ClassLight cl;
+                cl.moby = moby;
+                cl.shrub = shrub;
+                cl.o_class = cls;
+                for (int k = 0; k < 3; ++k) cl.off[k] = off[k];
+                C.push_back(cl);
+                g_class_sel = static_cast<int>(C.size()) - 1;
+                g_light_dirty = true;
+            };
+            if (pk.tie) {
+                ImGui::Text("tie class %d, the point at %.3f %.3f %.3f in its frame", pk.tie_class, pk.tie_off[0], pk.tie_off[1], pk.tie_off[2]);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Emit for every tie of this class")) emit(false, pk.tie_class, pk.tie_off);
+            }
+            if (pk.shrub) {
+                ImGui::Text("shrub class %d, the point at %.3f %.3f %.3f in its frame", pk.shrub_class, pk.shrub_off[0], pk.shrub_off[1], pk.shrub_off[2]);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Emit for every shrub of this class")) emit(false, pk.shrub_class, pk.shrub_off, true);
+            }
+            if (pk.moby) {
+                ImGui::Text("moby class %d (%.1f units from its origin), the point at %.3f %.3f %.3f in its frame", pk.moby_class, pk.moby_dist, pk.moby_off[0], pk.moby_off[1],
+                            pk.moby_off[2]);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Emit for every moby of this class")) emit(true, pk.moby_class, pk.moby_off);
+            }
+            if (!pk.tie && !pk.moby && !pk.shrub) ImGui::TextDisabled("no tie, shrub or moby there (the terrain?)");
+        }
+        for (size_t i = 0; i < C.size(); ++i) {
+            char t[128];
+            std::snprintf(t, sizeof t, "%s %d  at %.2f %.2f %.2f  r %.1f  x%.2f%s##cl%zu", C[i].moby ? "moby" : C[i].shrub ? "shrub" : "tie", C[i].o_class, C[i].off[0], C[i].off[1], C[i].off[2],
+                          C[i].radius, C[i].intensity, C[i].on ? "" : "  (off)", i);
+            if (ImGui::Selectable(t, static_cast<int>(i) == g_class_sel)) g_class_sel = static_cast<int>(i);
+        }
+        if (g_class_sel >= static_cast<int>(C.size())) g_class_sel = -1;
+        if (g_class_sel >= 0) {
+            ClassLight& cl = C[static_cast<size_t>(g_class_sel)];
+            bool ch = false;
+            ch |= ImGui::DragFloat3("Offset (its frame)", cl.off, 0.02f);
+            ch |= ImGui::ColorEdit3("Colour##cl", cl.col);
+            ch |= ImGui::SliderFloat("Intensity##cl", &cl.intensity, 0.0f, 3.0f);
+            ch |= ImGui::SliderFloat("Radius##cl", &cl.radius, 1.0f, 30.0f);
+            ch |= ImGui::SliderFloat("Flicker##cl", &cl.flicker, 0.0f, 1.0f);
+            ch |= ImGui::Checkbox("On##cl", &cl.on);
+            if (ImGui::Button("Delete##cl")) {
+                C.erase(C.begin() + g_class_sel);
+                g_class_sel = -1;
+                ch = true;
+            }
+            if (ch) g_light_dirty = true;
+        }
+        ImGui::TextDisabled("Live; Save (above) writes them as \"emit\" lines. Secondary Lights: All.");
+    }
+    g_class_light_selected = g_class_sel;
     g_user_light_selected = g_light_sel;
     if (g_light_markers) lights_markers(L);
 }
@@ -1166,6 +1377,11 @@ void dev_menu_game_frame() {
 
 void dev_menu_draw(double update_ms, double frame_ms) {
     g_user_light_selected = -1;  // (the Lights tab's selection pulses while the tab is shown)
+    g_class_light_selected = -1;
+    {  // (the crosshair's depth read only while the Lights tab asks for it, frame by frame)
+        float unused[3];
+        mrp_lighting_screen_point(-1.0f, -1.0f, unused);
+    }
     if (!g_menu || (!g_settings.open && !g_settings.show_stats)) return;
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
@@ -1198,6 +1414,7 @@ void dev_menu_draw(double update_ms, double frame_ms) {
                 if (tab("Camera")) { tab_camera(); ImGui::EndTabItem(); }
                 if (tab("Rendering")) { tab_rendering(); ImGui::EndTabItem(); }
                 if (tab("Lights")) { tab_lights(); ImGui::EndTabItem(); }
+                if (tab("Sun")) { tab_sun(); ImGui::EndTabItem(); }
                 if (tab("Display")) { tab_display(); ImGui::EndTabItem(); }
                 if (tab("Audio")) { tab_audio(); ImGui::EndTabItem(); }
                 if (tab("Levels")) { tab_levels(); ImGui::EndTabItem(); }

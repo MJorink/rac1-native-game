@@ -14,7 +14,7 @@
 //   as the debug menu's Levels tab asks it; during the boot (RAC1_BOOT=1):
 //   its title left for level N, the debug menu's skip)
 //   RAC1_LANGUAGE=0|2|3|4|5 (testing: the language)  RAC1_HEADLESS=1  RAC1_FRAMES=N  RAC1_SIM_INPUT=forward|jump|dive|turn|attack|throw|hud|quick|fire|shoot|hold|holdwalk|look|start|menu:<keys>|title:<keys>|ship|shipskip|vendor|seq:<script> (sim_script.h)   (testing)
-//   RAC1_AUDIO_DUMP=file.raw (the sound output, 48 kHz stereo s16)  RAC1_NO_AUDIO=1  RAC1_SND_TRACE=1
+//   RAC1_AUDIO_DUMP=file.raw (the sound output, 48 kHz stereo s16; RAC1_AUDIO_CHANNELS=6 / 8: 5.1 / 7.1, interleaved)  RAC1_NO_AUDIO=1  RAC1_SND_TRACE=1
 // RAC1_FADES=original|fast (the screen fade shown frame by frame as on the PS2, or run in one host frame: the default)
 // RAC1_HOST_DELAY_MS=n, RAC1_STEPS=n, RAC1_AUDIO_DEVICE=1 (testing: each host frame n ms longer; n game frames
 //     per host frame in a headless run (a window's catch-up); the audio device opened in a headless run: the game's state
@@ -143,8 +143,14 @@
 
 using namespace rac1;
 
-bool audio_out_start();  // audio_out.cpp
-void audio_out_push(const int16_t* pcm, int frames);
+bool audio_out_start(int channels);  // audio_out.cpp
+void audio_out_push(const int16_t* pcm, const int16_t* multi, int frames);
+int audio_out_channels();
+namespace rac1 {
+int advanced_audio_channels();  // advanced.cpp: Options > Sound's 5.1 / 7.1 (the device's channels)
+extern void (*g_advanced_audio_reopen)(int channels);
+}
+void audio_out_set_channels(int channels);
 void audio_out_set_alone(bool ok);
 uint64_t audio_out_alone_total();
 void audio_out_step(bool in_step);
@@ -167,6 +173,7 @@ constexpr const char* PLAYER_ENV[] = {
     "RAC1_DEBUG_TOOLS", "RAC1_HEADLESS", "RAC1_ISO", "RAC1_MEMCARD_DIR", "RAC1_ADVANCED_FILE", "RAC1_GRAPHICS_FILE", "RAC1_CONTROLS_FILE",
     "RAC1_WINDOW", "RAC1_FULLSCREEN", "RAC1_VSYNC", "RAC1_FPS_CAP", "RAC1_NO_AUDIO", "RAC1_AUDIO_DEVICE",
     "RAC1_AUDIO_PERIOD_MS", "RAC1_AUDIO_PERIODS", "RAC1_MOVIE_VOLUME", "RAC1_PRIORITY", "RAC1_IOP_MIRROR",
+    "RAC1_PYTHON",  // (set by tools/setup.py for the setup mode: the Python it runs the overlay matcher with)
 };
 
 // orig: (host) the gate, from the ELF's .init_array before the static initialisers (glibc passes argc / argv; on Windows
@@ -209,6 +216,7 @@ static int s_mrp_skip_mode = 1;  // orig: (host) RAC1_MRP_SKIP, see main()
 // commands on the audio thread and is what is heard (ADR 0013, it goes on alone while this thread stalls);
 //   this vsync is recorded for it, with the movie's samples of these 800 frames.
 FILE* g_audio_dump = nullptr;
+int g_audio_dump_ch = 2;  // (the dump's channels: the 5.1 / 7.1 choice at the start, Options > Sound or RAC1_AUDIO_CHANNELS)
 // orig: (host) a vsync: the timer, the vsync callback, the IOP's time (the SPU2's output)
 uint64_t g_vsyncs = 0;  // (testing: the vsyncs passed, RAC1_STALL_LOG)
 // (testing) RAC1_TEST_ZERO_FB=<first>,<last>[,raw]: the host frames of the frames first..last (exclusive) see a framebuffer
@@ -257,19 +265,28 @@ void vsync_passed() {
     ee_t1_vsync();
     vsync_callback();
     int16_t pcm[800 * 2];
-    snd989_iop_render(pcm, 800);
+    // (host) the 5.1 / 7.1 output of the game's IOP: for the dump, or for the device without the mirror
+    int16_t multi[800 * 8];
+    const int dev_ch = snd989_mirror_enabled() ? 2 : audio_out_channels();
+    const int multi_ch = g_audio_dump != nullptr && g_audio_dump_ch > 2 ? g_audio_dump_ch : dev_ch;
+    int16_t* const mp = multi_ch > 2 ? multi : nullptr;
+    snd989_iop_render(pcm, 800, mp, multi_ch);
     float movie_gl = 1.0f, movie_gr = 1.0f;
     snd989_movie_gain(movie_gl, movie_gr);  // (the IRX's volumes of the movie's voices, not unity)
     int16_t movie[800 * 2];
     const int movie_frames = movie_hw_audio_take(movie, 800);
+    if (mp != nullptr) snd989_movie_add_multi(mp, multi_ch, movie, movie_frames, movie_gl, movie_gr);
     movie_hw_audio_add(pcm, movie, movie_frames, movie_gl, movie_gr);
-    if (g_audio_dump != nullptr) std::fwrite(pcm, sizeof(pcm), 1, g_audio_dump);
+    if (g_audio_dump != nullptr) {
+        if (g_audio_dump_ch > 2) std::fwrite(multi, static_cast<size_t>(800 * g_audio_dump_ch) * 2, 1, g_audio_dump);
+        else std::fwrite(pcm, sizeof(pcm), 1, g_audio_dump);
+    }
     if (g_mirror_test) {
         mirror_test_vsync(movie, movie_frames, movie_gl, movie_gr, pcm);
         return;
     }
     if (snd989_mirror_enabled()) snd989_mirror_vsync(movie, movie_frames, movie_gl, movie_gr, pcm);
-    else audio_out_push(pcm, 800);
+    else audio_out_push(pcm, multi_ch == dev_ch ? mp : nullptr, 800);
 }
 
 // The chain a blocking loop sent at its last Kicked vsync (the screen fade's frames: the kick 0x2a08c8 at the wait,
@@ -2005,7 +2022,8 @@ int main(int argc, char** argv) {
     sound_callbacks_register();
     if (!boot) sound_system_init();
     rac1::host_priority_set_enabled(!headless);  // (rtkit's priorities in a window; RAC1_PRIORITY=0 / 1 decides)
-    if (want_audio && !audio_out_start()) snd989_mirror_disable();
+    if (want_audio && !audio_out_start(advanced_audio_channels())) snd989_mirror_disable();
+    g_advanced_audio_reopen = audio_out_set_channels;  // (Options > Sound: 5.1 / 7.1 / stereo)
     if (!boot) {
         if (!boot_loader_run([&] {
                 if (!toc_read() || !level_header_read(level) || !level_files_read()) return false;
@@ -2025,6 +2043,7 @@ int main(int argc, char** argv) {
     ee_write<uint16_t>(0x001518d2, 416);
     gs_memory_and_draw_envs();
     g_audio_dump = std::getenv("RAC1_AUDIO_DUMP") ? std::fopen(std::getenv("RAC1_AUDIO_DUMP"), "wb") : nullptr;
+    g_audio_dump_ch = advanced_audio_channels();
     ee_thread_set_vsync_hook(blocking_loop_vsync);  // (the vsync waits inside the game's code: the start's, a blocking loop's)
     rac1::gs::set_store_image_hook([](uint32_t bp, uint32_t, uint32_t psm) { g_scene_pic.store(bp, psm); });
     if (boot) {  // the boot module: its own image, the ports relocated onto it
@@ -2656,12 +2675,17 @@ int main(int argc, char** argv) {
             fd.gv.xscale = 1.0f / g_view_widen;
             fd.fb_w = static_cast<float>(lhu(0x001518d0));
             fd.fb_h = static_cast<float>(lhu(0x001518d2));
-            render_overscan_crop(fd.fb_w, fd.fb_h, fd.gv.crop);  // the 2D cut to a TV's area, or the full frame
+            render_overscan_crop(fd.fb_w, fd.fb_h, fd.gv.crop);  // the full frame (testing: RAC1_OVERSCAN cuts the 2D to a TV's area)
             // the glyphs' sampling inside their own cells (no neighbouring glyphs' lines around the letters, issue #76): the modern
             // view's; the faithful reference (RAC1_MRP=0) samples as the GS. (testing: RAC1_SPRITE_CLAMP=0 / 1 decides)
             {
                 static const char* s_sc = std::getenv("RAC1_SPRITE_CLAMP");
                 fd.gv.sprite_clamp = s_sc != nullptr ? std::atoi(s_sc) != 0 : g_moby_renderer == MobyRenderer::kMrp;
+                // the 2D slivers the game parks at the frame's edges (a HUD element hiding: its 3 leftmost columns for 16 frames,
+                // which a TV's overscan hid) not drawn, now that the full frame is always shown: the modern view's; the faithful
+                // reference draws all the GS drew. (testing: RAC1_EDGE_SLIVERS=1 draws them, 0 hides them)
+                static const char* s_es = std::getenv("RAC1_EDGE_SLIVERS");
+                fd.gv.hide_edge_slivers = s_es != nullptr ? std::atoi(s_es) == 0 : g_moby_renderer == MobyRenderer::kMrp;
             }
             // the frame's page: FRAME_1 of the draw environment the frame's fixed packet 0x13cf10
             // sets (render_passes.cpp), the screen even when sampled (the drop shadows' alpha)

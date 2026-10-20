@@ -170,17 +170,14 @@ void render_view_rect(int win_w, int win_h, int& x, int& y, int& w, int& h) {
 // orig: (host) see render_view.h
 void render_overscan_crop(float fb_w, float fb_h, int crop[4]) {
     crop[0] = crop[1] = crop[2] = crop[3] = 0;
-    int on = g_view_overscan_crop;
     static const char* s_env = std::getenv("RAC1_OVERSCAN");
-    if (s_env != nullptr) {
-        int m[4] = {0, 0, 0, 0};
-        if (std::sscanf(s_env, "%d,%d,%d,%d", &m[0], &m[1], &m[2], &m[3]) == 4) {
-            for (int i = 0; i < 4; ++i) crop[i] = std::max(0, m[i]);
-            return;
-        }
-        on = std::atoi(s_env);
+    if (s_env == nullptr) return;
+    int m[4] = {0, 0, 0, 0};
+    if (std::sscanf(s_env, "%d,%d,%d,%d", &m[0], &m[1], &m[2], &m[3]) == 4) {
+        for (int i = 0; i < 4; ++i) crop[i] = std::max(0, m[i]);
+        return;
     }
-    if (on == 0 || fb_w <= 0.0f || fb_h <= 0.0f) return;
+    if (std::atoi(s_env) == 0 || fb_w <= 0.0f || fb_h <= 0.0f) return;
     // the TV's overscan: the game shows its 512 x 416 frame at the top of the NTSC
     // display window DISPLAY DX 636 / DW 2560 VCK, DY 50 / DH 448 lines (0x151798, written by 0x1f3958), the nominal PS2
     // picture, about 90 % of the TV raster across: a TV's overscan reached its left, right and top edges, never its bottom

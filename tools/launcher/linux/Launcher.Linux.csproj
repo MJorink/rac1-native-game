@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The launcher for Linux (docs/launcher.md): one file with everything in it (.NET and Avalonia, the window
+       library), so there is nothing to install. Built with
+         dotnet publish tools/launcher/linux/Launcher.Linux.csproj -c Release -p:LauncherVersion=x.y.z -o out
+       (any .NET SDK 8 or newer, on Linux or Windows). Its window is here, what it does is in ../core/ (shared with the
+       Windows launcher, ../windows/). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>rac1-launcher</AssemblyName>
+    <RootNamespace>Rac1Launcher</RootNamespace>
+    <LauncherVersion Condition="'$(LauncherVersion)' == ''">0.0.0</LauncherVersion>
+    <Version>$(LauncherVersion)</Version>
+    <Product>rac1-native launcher</Product>
+    <Description>Installs, sets up, updates and starts rac1-native</Description>
+    <Copyright>rac1-native contributors, MIT license</Copyright>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <PublishTrimmed>true</PublishTrimmed>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <DebugType>none</DebugType>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- (HttpWebRequest, which the core shares with the .NET Framework launcher) -->
+    <NoWarn>$(NoWarn);SYSLIB0014</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../core/*.cs" />
+    <EmbeddedResource Include="launcher.png" LogicalName="launcher.png" />
+    <PackageReference Include="Avalonia" Version="11.3.6" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.6" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.6" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.6" />
+  </ItemGroup>
+</Project>

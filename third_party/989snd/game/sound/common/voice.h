@@ -68,6 +68,37 @@ class Voice {
   [[nodiscard]] bool IsReverb() const { return mReverb; }
   [[nodiscard]] bool IsReverbOnly() const { return mReverbOnly; }
 
+  // rac1: the SPU2 voice this voice would have (Synth::AllocVoice: the group's voice range, the lowest free one), and
+  // so its core (voices 0..23 core 0, 24..47 core 1); -1 / core 1 until allocated
+  void SetSlot(s8 slot) {
+    mSlot = slot;
+    mCore = slot >= 24 ? 1 : 0;
+  }
+  [[nodiscard]] s8 Slot() const { return mSlot; }
+  [[nodiscard]] u8 Core() const { return mCore; }
+  s8 mPriority{0};  // rac1: the tone's priority (the allocator's steal), and its start time
+  u32 mStartTime{0};
+
+  // rac1 (host): where the voice goes in a 5.1 / 7.1 output (Synth::Tick's speakers; nothing of the stereo mix):
+  // Front its left / right on the front left / right (the stereo mix's), Positional its sound's direction (989snd's
+  // pan in degrees: 0 ahead, 90 right, 180 behind) around the listener, Centre the centre speaker (the dialogue; a pan
+  // spreads it towards the front left / right)
+  enum class Place : u8 { Front, Positional, Centre };
+  void SetPlace(Place p, s32 pan) {
+    while (pan > 180) pan -= 360;
+    while (pan <= -180) pan += 360;
+    mPlace = p;
+    mPan = static_cast<s16>(pan);
+  }
+  [[nodiscard]] Place GetPlace() const { return mPlace; }
+  [[nodiscard]] s16 GetPan() const { return mPan; }
+  [[nodiscard]] s16 LastSample() const { return mLastSample; }
+  // the speaker gains for a pan, kept until the pan or the layout changes (Synth::Tick)
+  float mSpk[8]{};
+  s16 mSpkPan{0x7fff};
+  u8 mSpkLayout{0};
+  Place mSpkPlace{Place::Front};
+
   s16 GetEnvx() { return mADSR.Level(); }
 
   void SetSample(u16* sample) {
@@ -104,6 +135,11 @@ class Voice {
   bool mReverb{false};
   bool mReverbOnly{false};
   bool mENDX{false};
+  s8 mSlot{-1};
+  u8 mCore{1};
+  Place mPlace{Place::Front};
+  s16 mPan{0};
+  s16 mLastSample{0};
 
   void DecodeSamples();
   void UpdateBlockHeader();

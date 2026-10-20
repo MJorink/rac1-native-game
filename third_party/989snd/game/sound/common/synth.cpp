@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstdlib>
 #include <stdexcept>
 
 namespace snd {
@@ -144,29 +146,138 @@ void Synth::StepReverb(s32 revInL, s32 revInR) {
   mReverbPos = (mReverbPos + 1) & 0xFFFF;
 }
 
-s16Output Synth::Tick() {
+namespace {
+// rac1 (host): the speakers of a 5.1 / 7.1 output around the listener (degrees, 0 ahead, 90 right: 989snd's pan), in
+// order of angle, with their channel in the WAVE order (FL FR FC LFE, then 5.1: SL SR; 7.1: BL BR SL SR). The centre
+// is left out: the positional sounds are panned between the speakers of the ring; the centre is the dialogue's.
+struct Speaker {
+  int angle;
+  int channel;
+};
+constexpr Speaker kRing51[] = {{-110, 4}, {-30, 0}, {30, 1}, {110, 5}};
+constexpr Speaker kRing71[] = {{-150, 4}, {-90, 6}, {-30, 0}, {30, 1}, {90, 7}, {150, 5}};
+
+// the gains of a sound at `pan` degrees: equal power between the two speakers either side of it
+void RingGains(float* g, int pan, int channels) {
+  const Speaker* ring = channels == 8 ? kRing71 : kRing51;
+  const int n = channels == 8 ? 6 : 4;
+  for (int c = 0; c < 8; ++c) {
+    g[c] = 0.0f;
+  }
+  for (int i = 0; i < n; ++i) {
+    const Speaker& a = ring[i];
+    const Speaker& b = ring[(i + 1) % n];
+    const int span = (b.angle - a.angle + 360) % 360;
+    const int off = (pan - a.angle + 720) % 360;
+    if (off <= span) {
+      const float t = static_cast<float>(off) / static_cast<float>(span) * 1.5707963f;
+      g[a.channel] = std::cos(t);
+      g[b.channel] = std::sin(t);
+      return;
+    }
+  }
+}
+
+// the dialogue's gains: the centre, a pan spreading it towards the front left / right (equal power; a pan behind folded
+// to the front: the dialogue stays ahead)
+void CentreGains(float* g, int pan) {
+  for (int c = 0; c < 8; ++c) {
+    g[c] = 0.0f;
+  }
+  int a = std::abs(pan);
+  if (a > 90) {
+    a = 180 - a;
+  }
+  const float t = static_cast<float>(a) / 90.0f * 1.5707963f;
+  g[2] = std::cos(t);
+  g[pan < 0 ? 0 : 1] = std::sin(t);
+}
+
+s16 Clamp16f(float v) {
+  return static_cast<s16>(std::clamp(std::lround(v), static_cast<long>(INT16_MIN), static_cast<long>(INT16_MAX)));
+}
+}  // namespace
+
+s16Output Synth::Tick(s16* multi, int channels) {
   s32 dryL = 0;
   s32 dryR = 0;
+  s32 core0L = 0;  // rac1: core 0's voices (its output: into core 1's input, and its reverb with 0x0d)
+  s32 core0R = 0;
   s32 revInL = 0;
   s32 revInR = 0;
+  const bool spatial = multi != nullptr && (channels == 6 || channels == 8);
+  float spk[8] = {};
 
   mVoices.remove_if([](std::shared_ptr<Voice>& v) { return v->Dead(); });
   for (auto& v : mVoices) {
     s16Output vo = v->Run();
-    if (!v->IsReverbOnly()) {
-      dryL += vo.left;
-      dryR += vo.right;
+    // rac1: the SPU2's routing. A core-1 voice reaches the reverb when its tone has the reverb flag (VMIXEL / R, set
+    // from the tone's flag 1: 0x151cc). A core-0 voice's VMIXE feeds core 0's reverb, which the game never turns on
+    // (0x50 / 0x10 on core mask 2), but core 0's whole output goes into core 1's reverb when the game set the mixer
+    // mode (0x0d (0, 1) at its start, 0x28ca88): then every core-0 voice is reverberated. (A reverb-only tone, 0x10,
+    // on core 0 is kept feeding the reverb, as on core 1.)
+    if (v->Core() == 0 && mCore0Reverb) {
+      if (!v->IsReverbOnly()) {
+        core0L += vo.left;
+        core0R += vo.right;
+      } else {
+        revInL += vo.left;
+        revInR += vo.right;
+      }
+    } else {
+      if (!v->IsReverbOnly()) {
+        dryL += vo.left;
+        dryR += vo.right;
+      }
+      if (v->IsReverb()) {
+        revInL += vo.left;
+        revInR += vo.right;
+      }
     }
-    if (v->IsReverb()) {
-      revInL += vo.left;
-      revInR += vo.right;
+    if (spatial && !v->IsReverbOnly()) {
+      const Voice::Place place = mMono ? Voice::Place::Front : v->GetPlace();
+      if (place == Voice::Place::Front) {
+        spk[0] += vo.left;
+        spk[1] += vo.right;
+      } else {
+        if (v->mSpkPan != v->GetPan() || v->mSpkLayout != channels || v->mSpkPlace != place) {
+          if (place == Voice::Place::Positional) {
+            RingGains(v->mSpk, v->GetPan(), channels);
+          } else {
+            CentreGains(v->mSpk, v->GetPan());
+          }
+          v->mSpkPan = v->GetPan();
+          v->mSpkLayout = static_cast<u8>(channels);
+          v->mSpkPlace = place;
+        }
+        // the voice's level, its left and right's power, on its speakers
+        const float l = vo.left, r = vo.right;
+        float m = std::sqrt(l * l + r * r);
+        if (v->LastSample() < 0) {
+          m = -m;
+        }
+        for (int c = 0; c < channels; ++c) {
+          spk[c] += m * v->mSpk[c];
+        }
+      }
     }
   }
+  if (mCore0Reverb) {  // core 0's output (16 bits, as the SPU2's cores give) into core 1's dry and reverb inputs
+    const s16 c0L = Clamp16(core0L), c0R = Clamp16(core0R);
+    dryL += c0L;
+    dryR += c0R;
+    revInL += c0L;
+    revInR += c0R;
+  }
 
+  s32 wetL = 0;
+  s32 wetR = 0;
   if (mReverbMode > 0) {
     StepReverb(revInL, revInR);
-    dryL += ApplyVolume(mReverbOutL, mReverbDepth.left.GetCurrent());
-    dryR += ApplyVolume(mReverbOutR, mReverbDepth.right.GetCurrent());
+    wetL = ApplyVolume(mReverbOutL, mReverbDepth.left.GetCurrent());
+    wetR = ApplyVolume(mReverbOutR, mReverbDepth.right.GetCurrent());
+    dryL += wetL;
+    dryR += wetR;
     mReverbDepth.Run();
   }
 
@@ -174,13 +285,99 @@ s16Output Synth::Tick() {
   out.left = ApplyVolume(out.left, mVolume.left.GetCurrent());
   out.right = ApplyVolume(out.right, mVolume.right.GetCurrent());
 
+  if (spatial) {
+    // rac1 (host): the reverb, a diffuse sound, spread over its side's speakers at equal power (front and surround
+    // 1/sqrt(2) in 5.1; front, side and back 1/sqrt(3) in 7.1); the LFE silent (the original has none: a receiver's
+    // bass management sends the speakers' lows to the subwoofer)
+    if (wetL != 0 || wetR != 0) {
+      const float k = channels == 8 ? 0.57735027f : 0.70710678f;
+      const float wl = static_cast<float>(wetL) * k, wr = static_cast<float>(wetR) * k;
+      spk[0] += wl;
+      spk[1] += wr;
+      spk[4] += wl;
+      spk[5] += wr;
+      if (channels == 8) {
+        spk[6] += wl;
+        spk[7] += wr;
+      }
+    }
+    spk[3] = 0.0f;
+    const s32 vl = mVolume.left.GetCurrent(), vr = mVolume.right.GetCurrent();
+    for (int c = 0; c < channels; ++c) {
+      const bool right = c == 1 || c == 5 || c == 7;
+      multi[c] = ApplyVolume(Clamp16f(spk[c]), right ? vr : vl);
+    }
+  }
+
   mVolume.Run();
 
   return out;
 }
 
 void Synth::AddVoice(std::shared_ptr<Voice> voice) {
+  if (voice->Slot() >= 0) {
+    mSlots[voice->Slot()] = voice;
+  }
   mVoices.emplace_front(voice);
+}
+
+// orig: (host) the IRX's 0x14d60 (the core of the voice it would give)
+void Synth::AllocVoice(Voice& voice, int group, int priority) {
+  if (group < 0 || group >= 8) {
+    group = 7;
+  }
+  const int lo = mGroupRange[group].first, hi = mGroupRange[group].second;
+  voice.mPriority = static_cast<s8>(priority);
+  voice.mStartTime = ++mAllocTime;
+  int pick = -1;
+  for (int i = lo; i <= hi; ++i) {
+    auto o = mSlots[i].lock();
+    if (o == nullptr || o->Dead()) {
+      pick = i;
+      break;
+    }
+  }
+  if (pick < 0) {  // (the IRX steals the lowest priority, the oldest of equals: 0x14df0)
+    std::shared_ptr<Voice> best;
+    for (int i = lo; i <= hi; ++i) {
+      auto o = mSlots[i].lock();
+      if (pick < 0 || o->mPriority < best->mPriority ||
+          (o->mPriority == best->mPriority && o->mStartTime < best->mStartTime)) {
+        pick = i;
+        best = o;
+      }
+    }
+  }
+  if (pick < 0) {
+    return;
+  }
+  voice.SetSlot(static_cast<s8>(pick));  // (the slot taken by AddVoice)
+}
+
+// orig: (host) the IRX's 0x14ad4
+void Synth::SetGroupVoiceRange(int group, int lo, int hi) {
+  if (group < 0 || group >= 8) {
+    return;
+  }
+  if (lo < 0) {
+    lo = 0;
+  }
+  if (hi >= 48) {
+    hi = 47;
+  }
+  mGroupRange[group] = {static_cast<s8>(lo), static_cast<s8>(hi)};
+}
+
+// orig: (host) the IRX's 0x149e8: core 1's MMIX bits 0..1 (core 0's output into its reverb) from the second argument;
+// the groups' ranges from the first (1: core 1 for all but group 1; else every voice)
+void Synth::SetMixerMode(int channel_mode, int reverb_mode) {
+  mCore0Reverb = reverb_mode != 0;
+  if (channel_mode == 1) {
+    mGroupRange.fill({24, 47});
+    mGroupRange[1] = {0, 23};
+  } else {
+    mGroupRange.fill({0, 47});
+  }
 }
 
 void Synth::SetMasterVol(u32 volume) {

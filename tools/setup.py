@@ -105,6 +105,9 @@ def enable_windows_colors():
 
 
 USE_COLOR = sys.stdout.isatty() and (not WINDOWS or enable_windows_colors())
+# Run by the launcher (tools/launcher/, RAC1_LAUNCHER=1): the progress also as lines of their own that it reads,
+# "@step <n> <total> <message>" and "@progress <percent>" (it shows them as its progress bar, not as text)
+LAUNCHER = os.environ.get("RAC1_LAUNCHER") == "1"
 
 
 def disable_windows_quick_edit():
@@ -135,7 +138,18 @@ def color(code, text):
 
 
 def step(n, total, msg):
+    if LAUNCHER:
+        print(f"@step {n} {total} {msg}", flush=True)
     print("\n" + color("1;36", f"[{n}/{total}] {msg}"), flush=True)
+
+
+def progress(done, total):
+    """For the launcher: how far the current step is (a percent line, when it changed)."""
+    if LAUNCHER and total:
+        pct = min(100, done * 100 // total)
+        if pct != getattr(progress, "last", None):
+            progress.last = pct
+            print(f"@progress {pct}", flush=True)
 
 
 def ok(msg):
@@ -529,7 +543,8 @@ def generate_code(iso, jobs):
         for line in proc.stdout:
             log.write(line)
             if re.match(r"\S+:\S+\s+(ok|FAIL)\s", line):
-                done += 1
+                done = min(done + 1, units)  # (a unit run again prints a second line)
+                progress(done, units)
                 if USE_COLOR:
                     print(f"\r   {done}/{units}", end="", flush=True)
         rc = proc.wait()
@@ -654,9 +669,11 @@ def run_logged(cmd, log):
                 n = re.match(r"\[(\d+)/(\d+)\]", line)
                 if n:
                     m = re.match(r"(\d+)", str(int(n.group(1)) * 100 // max(1, int(n.group(2)))))
-            if m and m.group(1) != shown and USE_COLOR:
+            if m and m.group(1) != shown:
                 shown = m.group(1)
-                print(f"\r  {shown:>3}%", end="", flush=True)
+                progress(int(shown), 100)
+                if USE_COLOR:
+                    print(f"\r  {shown:>3}%", end="", flush=True)
         if USE_COLOR and shown:
             print()
         if proc.wait() == 0:
@@ -685,7 +702,11 @@ def build(jobs):
     if not run_logged(["cmake", "--build", str(BUILD_DIR), "-j", str(jobs)], BUILD_LOG):
         fail("The build failed (see above).")
     if not EXE.exists():
-        fail(f"{EXE} is missing after the build.")
+        # (the build ran to the end: the program was made, then removed, which is what an antivirus does with a new
+        # program it does not know; GitHub issue #69)
+        fail(f"{EXE} is missing after the build, although the build finished.\n"
+             "         An antivirus (Windows Security too) may have removed it: look in its protection history, allow\n"
+             f"         the file (or exclude this folder: {ROOT}), then run {SETUP_CMD} again.")
     ok(f"Built {EXE.relative_to(ROOT)}")
 
 
@@ -782,8 +803,12 @@ def setup_due():
 
 def game_env():
     """The environment the game's setup mode runs in: on Windows, the Python it runs the overlay matcher with
-    (src/platform/platform_win32.cpp) is this one."""
-    return dict(os.environ, RAC1_PYTHON=sys.executable) if WINDOWS else None
+    (src/platform/platform_win32.cpp) is this one. (RAC1_LAUNCHER is the setup's, not the game's: the game would
+    report it as an unknown testing switch.)"""
+    env = {k: v for k, v in os.environ.items() if k != "RAC1_LAUNCHER"}
+    if WINDOWS:
+        env["RAC1_PYTHON"] = sys.executable
+    return env
 
 
 # --- 6. Updating (--update, GitHub issue #13) ---------------------------------------------------
@@ -1063,7 +1088,8 @@ def update_zip(channel, over_git=False):
     src_root = subdirs[0] if len(subdirs) == 1 else unpack_dir
 
     # Back up the source files about to be replaced or removed
-    new_files = list(zip_source_files(src_root).keys())
+    new_hashes = zip_source_files(src_root)
+    new_files = list(new_hashes.keys())
     new_set = set(new_files)
     # (removed: what the previous archive brought and this one no longer has; only inside the archive's folders, as
     # the records made by 0.3.0's updater also list the player's own files in the top folder)
@@ -1103,10 +1129,16 @@ def update_zip(channel, over_git=False):
     try:
         for rel in removed:
             (ROOT / rel).unlink(missing_ok=True)
+        copied = 0
         for rel in new_files:
             dst = ROOT / rel
+            # (a file the new version does not change is left as it is, with its time: the build then recompiles
+            # only what changed, not everything the archive brought)
+            if rel in old_set and file_sha256(dst) == new_hashes[rel]:
+                continue
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_root / rel, dst)
+            copied += 1
         UPDATE_VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
         UPDATE_VERSION_FILE.write_text("\n".join(ver_lines) + "\n", encoding="ascii")
     except OSError as e:
@@ -1119,7 +1151,7 @@ def update_zip(channel, over_git=False):
     if over_git:
         state["zip_over_git"] = True
     save_state(state)
-    ok(f"Unpacked {label}.")
+    ok(f"Unpacked {label} ({copied} of its {len(new_files)} files changed, {len(removed)} removed).")
     return restore
 
 
@@ -1144,6 +1176,20 @@ def run_update(args):
     if GEN_SRC.is_dir():
         shutil.copytree(GEN_SRC, gen_bak)
 
+    try:
+        restore_sources = fetch_update(channel)
+    except SystemExit:
+        # (stopped before anything changed: no network, local changes...; the backups, a copy of the program among
+        # them, are not left behind)
+        exe_bak.unlink(missing_ok=True)
+        state_bak.unlink(missing_ok=True)
+        shutil.rmtree(gen_bak, ignore_errors=True)
+        raise
+    finish_update(args, restore_sources, exe_bak, state_bak, gen_bak, had_state)
+
+
+def fetch_update(channel):
+    """The new sources, with git or the source zip; returns the callback that puts the previous ones back (or None)."""
     restore_sources = None
     if not (ROOT / ".git").exists():
         restore_sources = update_zip(channel)
@@ -1170,7 +1216,11 @@ def run_update(args):
                   "(To update with git again later: install Git, then\n"
                   "      `git fetch` and `git reset --hard origin/main`, or the release's tag.)", flush=True)
             restore_sources = update_zip(channel, over_git=True)
+    return restore_sources
 
+
+def finish_update(args, restore_sources, exe_bak, state_bak, gen_bak, had_state):
+    """The updated setup, in a child process; on failure, the previous sources, program and generated code back."""
     step(2, 2, "Rebuilding and updating the game's data")
     child_cmd = [sys.executable, str(ROOT / "tools/setup.py"), "--no-play"]
     if args.iso:

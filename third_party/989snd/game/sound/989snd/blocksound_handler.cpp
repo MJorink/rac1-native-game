@@ -77,6 +77,7 @@ BlockSoundHandler::BlockSoundHandler(SoundBank& bank,
 
   m_cur_volume = play_vol;
   m_cur_pan = pan;
+  m_positional = pan != 0;
   m_cur_pb = pitch_bend;
   m_cur_pm = pitch_mod;
 
@@ -254,6 +255,9 @@ void BlockSoundHandler::ApplyVolPan(s32 vol, s32 pan, bool cancel_autopan) {
   if (new_pan != m_cur_pan || new_vol != m_cur_volume) {
     m_cur_volume = new_vol;
     m_cur_pan = new_pan;
+    if (new_pan != 0) {
+      m_positional = true;
+    }
 
     if (cancel_autopan) {
       for (auto& c : m_children) {
@@ -273,8 +277,15 @@ void BlockSoundHandler::ApplyVolPan(s32 vol, s32 pan, bool cancel_autopan) {
       auto right = m_vm.AdjustVolToGroup(volume.right, m_group);
 
       voice->SetVolume(left >> 1, right >> 1);
+      Place(*voice);
     }
   }
+}
+
+// rac1 (host): a voice's place in 5.1 / 7.1: a positional sound's voices by their pan (the sound's and the tone's),
+// the others on the front left / right as in stereo
+void BlockSoundHandler::Place(BlockSoundVoice& voice) {
+  voice.SetPlace(m_positional ? Voice::Place::Positional : Voice::Place::Front, m_cur_pan + voice.g_pan);
 }
 
 void BlockSoundHandler::SetVolPan(s32 vol, s32 pan) {

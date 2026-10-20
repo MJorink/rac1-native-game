@@ -32,6 +32,20 @@ namespace rac1 {
 
 bool g_advanced_disabled = false;
 
+// (enhancement, advanced.cpp) Options > Sound's output row with 5.1 / 7.1. The game's row is Mono / Stereo, its byte
+// 0x15ede8 (the game's options, in its save; 0 mono); 5.1 and 7.1 come after Stereo: the host's choice (the audio
+// device's channels, kept in the preferences), the game's byte left at Stereo, so nothing the game keeps or reads changes.
+// - advanced_audio_channels: the device's channels, 2 / 6 (5.1) / 8 (7.1) (RAC1_AUDIO_CHANNELS over the preferences;
+//   2 while every enhancement is off)
+// - advanced_sound_output_cycle: cross on the row: the next of Mono, Stereo, 5.1, 7.1 (the game's byte 0 for Mono, 1
+//   for the others; the device reopened); false while every enhancement is off (the game's own toggle then)
+// - advanced_sound_output_text: the row's text when the game's byte says Stereo: "5.1" / "7.1", else `stereo_text`
+int advanced_audio_channels();
+bool advanced_sound_output_cycle(uint32_t mono_byte);
+int32_t advanced_sound_output_text(int32_t stereo_text);
+// the host's device reopened with that many channels (audio_out_set_channels, set by the host's start; none in the oracle)
+void (*g_advanced_audio_reopen)(int channels) = nullptr;
+
 namespace {
 constexpr uint32_t ADV = 0x000f0000u;
 constexpr uint32_t SETTINGS = ADV;             // one byte per setting (the settings widget writes them)
@@ -67,16 +81,16 @@ constexpr OvConst<0x001b8888u> MAIN_OPTIONS_PAGE{};  // the main menu's Options 
 
 // Our text ids, after the game's (0x4e00..0x5300 in the level text tables)
 constexpr int32_t TEXT_FIRST = 0x7f00;
-enum : int32_t { T_ADVANCED, T_HELP, T_QUICK_SELECT, T_NORMAL, T_PAUSE, T_CONTROLS, T_CLASSIC, T_MODERN, T_MOVEMENT, T_ORIGINAL, T_STRAFING, T_RAC3, T_FADES, T_FAST, T_FADES_ORIGINAL, T_COUNT };
+enum : int32_t { T_ADVANCED, T_HELP, T_QUICK_SELECT, T_NORMAL, T_PAUSE, T_CONTROLS, T_CLASSIC, T_MODERN, T_MOVEMENT, T_ORIGINAL, T_STRAFING, T_RAC3, T_FADES, T_FAST, T_FADES_ORIGINAL, T_SOUND_51, T_SOUND_71, T_COUNT };
 // per language (0x15ed88: 0 English, 2 French, 3 German, 4 Spanish, 5 Italian; French in English
 // for now, the font's accented letters not looked at yet)
 constexpr const char* TEXTS[6][T_COUNT] = {
-    {"Advanced", "Extra settings of the PC version", "Quick Select", "Normal", "Pause", "Aiming", "Original", "Modern", "Movement", "Original", "Strafing", "RAC 3", "Fades", "Fast", "Original"},
-    {"Advanced", "Extra settings of the PC version", "Quick Select", "Normal", "Pause", "Aiming", "Original", "Modern", "Movement", "Original", "Strafing", "RAC 3", "Fades", "Fast", "Original"},
-    {"Advanced", "Extra settings of the PC version", "Quick Select", "Normal", "Pause", "Aiming", "Original", "Modern", "Movement", "Original", "Strafing", "RAC 3", "Fades", "Fast", "Original"},
-    {"Erweitert", "Extra-Einstellungen der PC-Version", "Schnellwahl", "Normal", "Pause", "Zielen", "Original", "Modern", "Bewegung", "Original", "Strafing", "RAC 3", "Blenden", "Schnell", "Original"},
-    {"Avanzado", "Ajustes extra de la version PC", "Seleccion rapida", "Normal", "Pausa", "Apuntado", "Original", "Moderno", "Movimiento", "Original", "Strafing", "RAC 3", "Fundidos", "Rapidos", "Originales"},
-    {"Avanzate", "Impostazioni extra della versione PC", "Scelta rapida", "Normale", "Pausa", "Mira", "Originale", "Moderna", "Movimento", "Originale", "Strafing", "RAC 3", "Dissolvenze", "Rapide", "Originali"},
+    {"Advanced", "Extra settings of the PC version", "Quick Select", "Normal", "Pause", "Aiming", "Original", "Modern", "Movement", "Original", "Strafing", "RAC 3", "Fades", "Fast", "Original", "5.1", "7.1"},
+    {"Advanced", "Extra settings of the PC version", "Quick Select", "Normal", "Pause", "Aiming", "Original", "Modern", "Movement", "Original", "Strafing", "RAC 3", "Fades", "Fast", "Original", "5.1", "7.1"},
+    {"Advanced", "Extra settings of the PC version", "Quick Select", "Normal", "Pause", "Aiming", "Original", "Modern", "Movement", "Original", "Strafing", "RAC 3", "Fades", "Fast", "Original", "5.1", "7.1"},
+    {"Erweitert", "Extra-Einstellungen der PC-Version", "Schnellwahl", "Normal", "Pause", "Zielen", "Original", "Modern", "Bewegung", "Original", "Strafing", "RAC 3", "Blenden", "Schnell", "Original", "5.1", "7.1"},
+    {"Avanzado", "Ajustes extra de la version PC", "Seleccion rapida", "Normal", "Pausa", "Apuntado", "Original", "Moderno", "Movimiento", "Original", "Strafing", "RAC 3", "Fundidos", "Rapidos", "Originales", "5.1", "7.1"},
+    {"Avanzate", "Impostazioni extra della versione PC", "Scelta rapida", "Normale", "Pausa", "Mira", "Originale", "Moderna", "Movimento", "Originale", "Strafing", "RAC 3", "Dissolvenze", "Rapide", "Originali", "5.1", "7.1"},
 };
 constexpr uint32_t STRING_SIZE = 0x30;
 static_assert(0x800 + 6 * T_COUNT * STRING_SIZE <= 0x2000, "the Advanced page's texts end where the Graphics page's block begins");
@@ -140,6 +154,7 @@ std::filesystem::path prefs_path() {
     return "advanced_options.txt";
 }
 
+int g_audio_channels = 0;   // Options > Sound's 5.1 / 7.1 (6 / 8), else 2; 0: not read yet (advanced_audio_channels)
 std::string g_update_skip;  // the update "Skip Version" chose (update_notice.h): a release's tag, or main's commit
 
 // orig: (none) — enhancement: a preferences file's "name value" lines, each given to `line`; false when none
@@ -161,6 +176,7 @@ bool prefs_read(const std::filesystem::path& path) {
             g_update_skip = value;
             return;
         }
+        if (std::strcmp(name, "audio_channels") == 0) return;  // (advanced_audio_channels)
         char* end = nullptr;
         const unsigned long v = std::strtoul(value, &end, 10);
         if (end == value || *end != 0) return;
@@ -203,6 +219,7 @@ void settings_save() {
         std::fprintf(f, "update_check_off %u\n", lbu(UPDATE_OFF));
         std::fprintf(f, "update_channel %u\n", lbu(UPDATE_DEV));
         if (!g_update_skip.empty()) std::fprintf(f, "update_skip %s\n", g_update_skip.c_str());
+        if (g_audio_channels > 2) std::fprintf(f, "audio_channels %d\n", g_audio_channels);
         std::fclose(f);
     }
     settings_mark_saved();
@@ -1318,6 +1335,52 @@ void advanced_update_skip(const std::string& id) {
     settings_load();
     g_update_skip = id;
     settings_save();
+}
+
+// --- Options > Sound: 5.1 / 7.1 ---
+// The game's own row is Mono / Stereo, the byte 0x15ede8 (the game's options, in its save; 0 mono). Ours adds 5.1 and
+// 7.1 after Stereo: the host's choice (the audio device's channels, kept in the preferences as audio_channels 6 / 8),
+// the game's byte left at Stereo, so that nothing the game keeps or reads changes.
+
+// orig: (none) — enhancement (advanced.h)
+int advanced_audio_channels() {
+    if (const char* e = std::getenv("RAC1_AUDIO_CHANNELS")) {  // (testing, and headless dumps)
+        const int v = std::strcmp(e, "5.1") == 0 ? 6 : std::strcmp(e, "7.1") == 0 ? 8 : std::atoi(e);
+        return v == 6 || v == 8 ? v : 2;
+    }
+    if (g_advanced_disabled) return 2;
+    if (g_audio_channels == 0) {
+        g_audio_channels = 2;
+        prefs_lines(prefs_path(), [](const char* name, const char* value) {
+            if (std::strcmp(name, "audio_channels") == 0) {
+                const int v = std::atoi(value);
+                g_audio_channels = v == 6 || v == 8 ? v : 2;
+            }
+        });
+    }
+    return g_audio_channels;
+}
+
+// orig: (none) — enhancement (advanced.h)
+bool advanced_sound_output_cycle(uint32_t mono_byte) {
+    if (g_advanced_disabled) return false;
+    settings_load();
+    const int ch = advanced_audio_channels();
+    const int now = lw(mono_byte) == 0 ? 0 : ch == 6 ? 2 : ch == 8 ? 3 : 1;  // Mono, Stereo, 5.1, 7.1
+    const int next = (now + 1) % 4;
+    sw(mono_byte, next == 0 ? 0u : 1u);
+    constexpr int kChannels[4] = {2, 2, 6, 8};
+    g_audio_channels = kChannels[next];
+    if (g_loaded) settings_save();
+    if (g_advanced_audio_reopen != nullptr) g_advanced_audio_reopen(advanced_audio_channels());  // (RAC1_AUDIO_CHANNELS over the menu)
+    return true;
+}
+
+// orig: (none) — enhancement (advanced.h)
+int32_t advanced_sound_output_text(int32_t stereo_text) {
+    if (g_advanced_disabled) return stereo_text;
+    const int ch = advanced_audio_channels();
+    return ch == 6 ? TEXT_FIRST + T_SOUND_51 : ch == 8 ? TEXT_FIRST + T_SOUND_71 : stereo_text;
 }
 
 // orig: (none) — enhancement (advanced.h)

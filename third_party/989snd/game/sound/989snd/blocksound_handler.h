@@ -75,6 +75,9 @@ class BlockSoundHandler : public SoundHandler {
   s32 m_orig_pan{0};
   s32 m_cur_volume{0};
   s32 m_cur_pan{0};
+  bool m_positional{false};  // rac1 (host): played or moved with a pan (the world's sounds, sound_pan): its voices
+                             // placed by their direction in 5.1 / 7.1
+  void Place(BlockSoundVoice& voice);
   s32 m_cur_pm{0};
   s32 m_cur_pb{0};
   s32 m_app_volume{0};

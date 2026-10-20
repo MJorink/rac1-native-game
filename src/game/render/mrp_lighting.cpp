@@ -37,15 +37,15 @@ int env_int(const char* name, int def) {
 
 int g_modern_shadows = env_int("RAC1_SHADOWS", 0);
 int g_shadow_quality = std::clamp(env_int("RAC1_SHADOW_RES", 1), 0, 2);
-int g_shadow_strength = std::clamp(env_int("RAC1_SHADOW_STRENGTH", 55), 0, 100);
+int g_shadow_strength = std::clamp(env_int("RAC1_SHADOW_STRENGTH", 70), 0, 100);
 int g_shadow_debug = env_int("RAC1_SHADOW_DEBUG", 0);
 int g_modern_points = env_int("RAC1_POINTS", 1);
 int g_point_shadows = env_int("RAC1_POINT_SHADOWS", 0);
 int g_auto_lights = env_int("RAC1_AUTO_LIGHTS", 1);
 int g_shadow_cache = env_int("RAC1_SHADOW_CACHE", 1);
 int g_user_light_selected = -1;
-int g_shadow_fade = env_int("RAC1_SHADOW_FADE", 1);
 int g_ao = env_int("RAC1_AO", 0);
+int g_sun_rays = env_int("RAC1_SUN_RAYS", 0);
 float g_shadow_moby_dist = std::getenv("RAC1_SHADOW_MOBY_DIST") != nullptr ? static_cast<float>(std::atof(std::getenv("RAC1_SHADOW_MOBY_DIST"))) : 0.0f;
 
 namespace {
@@ -54,7 +54,6 @@ constexpr int kUnit = 24;  // the shadow map's texture unit (the world's sampler
 constexpr GLenum kGlCubeMapArray = 0x9009;  // (GL_TEXTURE_CUBE_MAP_ARRAY, GL 4.0: not in the loader's header)
 constexpr int kPtUnit = 25;  // the point lights' cube shadow maps' unit
 constexpr int kTileUnit = 26;
-constexpr int kDepthUnit = 27;  // the cascades' maps without the compare (their depths) // the point lights' screen tiles' unit
 constexpr int kTilesX = 32, kTilesY = 18;  // (the view's clip square cut into tiles: per tile the lights whose sphere reaches it)
 constexpr int kPtShadows = 4;  // the point lights with a shadow at most (the nearest)
 constexpr int kPtRes = 512;    // their cube faces' resolution
@@ -67,9 +66,31 @@ constexpr float kBack = 400.0f;
 // static world is drawn again); the casters outside the view are looked for in the same larger sphere (mrp_lighting_cull_params)
 constexpr float kCacheGrow = 1.25f;
 std::atomic<bool> g_sun_known{false};
+// the level's own sun direction (our data: "sun <azimuth> <elevation>" in data/lights/levelNN.txt, degrees; see mrp_lighting.h)
+struct SunFile {
+    bool on = false;
+    float az = 0.0f, el = 45.0f;
+} g_sun_file;
+bool g_sun_snap = false;  // (the editor changed it: the sun turned at once, not a degree a frame)
+// the level's interiors (our data: "interior x0 y0 z0 x1 y1 z1" boxes and "interior_set <n>" light sets in its file): where the
+// camera is in one (or the hero is lit with that set), the sun is off - the original's look -, faded over kInteriorFade frames
+std::vector<SunInterior> g_interiors;
+std::vector<int> g_interior_sets;
+constexpr float kInteriorFade = 18.0f;  // (about 0.3 s)
+float g_interior_k = 0.0f;              // 0 outdoors .. 1 inside (faded)
+int g_interior_hero_set = -1;           // (the hero's light set, the debug menu's)
+void user_ensure();  // (the level's file read, once per level: below)
+void screen_point_read(const int vp[4]);  // (the debug menu's crosshair: below)
+void lamp_scan(const int vp[4]);          // (testing, RAC1_LAMP_SCAN: below)
 std::atomic<bool> g_has_sun{true};  // the level's key light comes from above: the sun's shadows (else none: Blarg)
 // how much of the sun's weight the view keeps: 0 covered from the sun .. 1 open (see kProbeW)
 float view_open();
+// orig: (host) the covered views' probe: off (the level's interiors decide where the sun is off - a short covered passage
+// faded the sun out and it came back slowly); RAC1_SUN_COVER=1 turns it on, for testing
+bool cover_probe_on() {
+    static const bool on = env_int("RAC1_SUN_COVER", 0) != 0;
+    return on;
+}
 std::atomic<bool> g_casc_on{true};  // the cascades drawn: the zone has a sun (its shadows' weight may be faded to 0: the view covered)
 float g_cull_sun[3] = {0.0f, 0.0f, 1.0f};  // (the sun for the casters' search on the scene's worker)
 float g_cull_tan[2] = {0.0f, 0.0f};         // (the drawn view's half-angle tangents, 1 / P00 and 1 / P11)
@@ -90,9 +111,11 @@ struct State {
     Cascade casc[kCascades];
     glm::vec3 sun{0.0f, 0.0f, 1.0f};  // toward the sun
     float sun_k = 1.0f;               // its shadows' weight (the zone's light's share; faded between zones)
+    glm::vec4 key{0.0f};              // the key light's colour (as the set holds it) and back-face factor: what a shadow takes off the world's colours
+    glm::vec3 key_dir{0.0f, 0.0f, 1.0f};  // toward the key light as the game lights with it (the sun's direction unless the level's file turns it)
     int npts = 0;                     // the frame's active point lights: position, radius; colour
     glm::vec4 pt_pos[kMaxPts], pt_col[kMaxPts];  // (pt_col.w: the light's cube in the shadow array, -1 none)
-    int pt_slot[kMaxPts] = {};                   // (the game's slot of each: its casters' view, 3 + slot; -1 an automatic emitter)
+    int pt_slot[kMaxPts] = {};                   // (the game's slot of each: its casters' view, 3 + slot; -1 an automatic emitter; -2 a moby class's lamp: no shadow cube)
     uint64_t frame = 0;              // the far cascade's turn
     // the static world's cache per cascade: the cascade's box held still while the view's slice stays inside it (its
     // sphere, kCacheGrow times the slice's), the world's casters drawn into `stex` only when it moves; each frame that map is copied
@@ -134,6 +157,7 @@ struct SetSun {
     glm::vec3 dir{0.0f, 0.0f, 1.0f};
     float weight = 0.0f;
     bool ok = false;
+    glm::vec4 key{0.0f};  // that light's colour (rgb as the set holds it: x 128 in the vertex colours' bytes) and back-face factor (w: the set's k)
 };
 SetSun set_sun(uint32_t set) {
     SetSun r;
@@ -157,19 +181,17 @@ SetSun set_sun(uint32_t set) {
     r.dir = glm::normalize(dir[pick]);
     r.weight = lum[pick] / best;
     r.ok = true;
+    const uint32_t c = base + 0x20 * static_cast<uint32_t>(pick);
+    r.key = glm::vec4(std::max(lwc1(c), 0.0f), std::max(lwc1(c + 4), 0.0f), std::max(lwc1(c + 8), 0.0f), std::clamp(lwc1(c + 0xc), 0.0f, 1.0f));
     return r;
 }
 
-// orig: (host) the direction toward the sun this frame, and its shadows' weight (0..1; 0: no sun): RAC1_SUN_DIR="x,y,z" (world, z up),
-// else the light sets the game lights the hero with - moby +0x38 / +0x39, blended by +0x3a / 256: the zone's
+// orig: (host) the game's key light this frame: the direction toward it, its shadows' weight (0..1; 0: no sun) - the light sets the game lights the hero with - moby +0x38 / +0x39, blended by +0x3a / 256: the zone's
 // own key light, as Ratchet is lit (Veldin's outdoors set 0, its house set 1; Blarg's zones each their own) - each set's sun (set_sun),
 // the two blended. On Veldin's outdoors (-0.397, 0.852, -0.342): the low warm sun the sky shows (checked against the screenshots)
-glm::vec3 sun_direction(float* weight) {
+glm::vec3 game_sun(float* weight, glm::vec4* key) {
     *weight = 1.0f;
-    if (const char* e = std::getenv("RAC1_SUN_DIR")) {
-        float x = 0, y = 0, z = 0;
-        if (std::sscanf(e, "%f,%f,%f", &x, &y, &z) == 3 && x * x + y * y + z * z > 1e-6f) return glm::normalize(glm::vec3(x, y, z));
-    }
+    *key = glm::vec4(0.0f);
     if (std::getenv("RAC1_SHADOW_LIGHTS") != nullptr) {  // (testing: the level's light sets, once)
         static uint32_t shown = 0xffffffffu;
         if (shown != OV(0x0017fec0u)) {
@@ -234,19 +256,124 @@ glm::vec3 sun_direction(float* weight) {
         const float wa = sa.ok ? sa.weight : 0.0f;
         const float wb = sb.ok ? sb.weight : 0.0f;
         *weight = wa + (wb - wa) * w;
+        *key = s0.key;
         return s0.dir;
     }
     if (sa.ok && sb.ok) {
         *weight = sa.weight + (sb.weight - sa.weight) * w;
+        *key = sa.key + (sb.key - sa.key) * w;
         return glm::normalize(sa.dir + (sb.dir - sa.dir) * w);
     }
     if (sa.ok || sb.ok) {
         const SetSun& s1 = sa.ok ? sa : sb;
         *weight = s1.weight * (sa.ok ? 1.0f - w : w);
+        *key = s1.key;
         return s1.dir;
     }
     *weight = 0.0f;
     return glm::normalize(glm::vec3(0.4f, -0.85f, 0.35f));
+}
+
+// orig: (host) the sun's shadows this frame: the direction toward the sun, their weight, the key light's colour and the game's own
+// direction for it (what a shadow takes off the world's colours: the game's term, whatever way the shadows are cast). The game's key
+// light (game_sun), turned where the level's file says so (g_sun_file: only where the game has a sun - its weight and colour kept);
+// RAC1_SUN_DIR="x,y,z" (testing, world, z up) turns it everywhere, a sun of weight 1 where the game has none
+glm::vec3 sun_direction(float* weight, glm::vec4* key, glm::vec3* key_dir) {
+    const glm::vec3 g = game_sun(weight, key);
+    *key_dir = g;
+    if (const char* e = std::getenv("RAC1_SUN_DIR")) {
+        float x = 0, y = 0, z = 0;
+        if (std::sscanf(e, "%f,%f,%f", &x, &y, &z) == 3 && x * x + y * y + z * z > 1e-6f) {
+            if (!(*weight > 0.0f)) {
+                *weight = 1.0f;
+                *key = glm::vec4(0.0f);
+            }
+            return glm::normalize(glm::vec3(x, y, z));
+        }
+    }
+    user_ensure();
+    if (g_sun_file.on && *weight > 0.0f) {
+        const float az = glm::radians(g_sun_file.az), el = glm::radians(g_sun_file.el);
+        return glm::vec3(std::cos(el) * std::cos(az), std::cos(el) * std::sin(az), std::sin(el));
+    }
+    return g;
+}
+
+// orig: (host) testing, RAC1_TFRAG_LIGHT_TRACE=<every>[,x,y,z,r]: the terrain's lit colours near the hero (or that point) taken
+// apart as the game's relighting (world_tfrag_lighting 0x295350, world_render.md section 10) makes them - the vertex's base colour,
+// its light set's two directional terms (colour x max(n.l, k n.l)) - against the colour EE memory holds; and the sun's set
+void tfrag_light_trace() {
+    const char* e = std::getenv("RAC1_TFRAG_LIGHT_TRACE");
+    if (e == nullptr) return;
+    static uint64_t n = 0;
+    int every = 60;
+    float px = 0, py = 0, pz = 0, pr = 12.0f;
+    const int got = std::sscanf(e, "%d,%f,%f,%f,%f", &every, &px, &py, &pz, &pr);
+    if (n++ % static_cast<uint64_t>(std::max(1, every)) != 0) return;
+    if (got < 4) {
+        const uint32_t hero = lwu(OV(0x0015ffd8u));
+        if (hero == 0) return;
+        px = lwc1(hero + 0x10);
+        py = lwc1(hero + 0x14);
+        pz = lwc1(hero + 0x18);
+    }
+    const uint32_t table = lwu(OV(0x00160f4cu));
+    const int32_t count = lw(OV(0x00160f50u));
+    if (table == 0 || count <= 0 || count > 0x10000) return;
+    const uint32_t sets = OV(0x0017fec0u), norms = OV(0x00166080u);
+    auto set_term = [&](uint32_t set, const glm::vec3& nrm, int l) {  // (one light's term, 0..255 units: the routine's colours are 65536 + byte / 128)
+        const uint32_t c = sets + 0x40 * (set & 15) + 0x20 * static_cast<uint32_t>(l), d = c + 0x10;
+        const float k = lwc1(c + 0xc);
+        const float nd = -glm::dot(nrm, glm::vec3(lwc1(d), lwc1(d + 4), lwc1(d + 8)));  // (toward the light)
+        return glm::vec3(lwc1(c), lwc1(c + 4), lwc1(c + 8)) * (128.0f * std::max(nd, k * nd));
+    };
+    double sum_base = 0, sum_t[2] = {0, 0}, sum_lit = 0, sum_err = 0;
+    int verts = 0, back = 0, neg_key = 0;
+    std::map<uint32_t, int> set_use;
+    for (int32_t i = 0; i < count; ++i) {
+        const uint32_t ent = table + 0x40 * static_cast<uint32_t>(i);
+        const uint32_t data = lwu(ent + 0x10);
+        if (data == 0 || data >= 0x02000000u) continue;
+        const int8_t single = static_cast<int8_t>(lbu(ent + 0x34));  // (>= 0: one set for the whole entry, its count +0x29 pairs)
+        const uint32_t va = data + static_cast<uint32_t>(static_cast<int32_t>(lh(ent + 0x30))) + 0x10;
+        const uint32_t nv = single >= 0 ? 2u * lbu(ent + 0x29) : lbu(ent + 0x3c);
+        const uint32_t lit = data + lhu(ent + 0x1e);
+        const glm::vec3 base_pos(static_cast<float>(lw(va - 0x10)) / 1024.0f, static_cast<float>(lw(va - 0xc)) / 1024.0f, static_cast<float>(lw(va - 8)) / 1024.0f);
+        for (uint32_t v = 0; v < nv; ++v) {
+            const uint32_t vx = va + 8 * v;
+            const uint32_t po = data + lhu(vx);
+            const glm::vec3 p = base_pos + glm::vec3(lh(po), lh(po + 2), lh(po + 4)) / 1024.0f;
+            if (glm::length(p - glm::vec3(px, py, pz)) > pr) continue;
+            const uint32_t az = lbu(vx + 2), el = lbu(vx + 3);
+            const float ca = lwc1(norms + 8 * az), sa = lwc1(norms + 8 * az + 4), ce = lwc1(norms + 8 * el), se = lwc1(norms + 8 * el + 4);
+            const glm::vec3 nrm(ca * ce, sa * ce, se);
+            const uint16_t b5 = lhu(vx + 4), sh = lhu(vx + 6);
+            const glm::vec3 base(static_cast<float>((b5 & 31) << 3), static_cast<float>(((b5 >> 5) & 31) << 3), static_cast<float>(((b5 >> 10) & 31) << 3));
+            const uint32_t sa_ = single >= 0 ? static_cast<uint32_t>(single) : (sh & 15u), sb_ = single >= 0 ? sa_ : ((sh >> 4) & 15u);
+            const float wb = single >= 0 ? 0.0f : static_cast<float>(sh >> 8) / 256.0f;
+            glm::vec3 t[2];
+            for (int l = 0; l < 2; ++l) t[l] = set_term(sa_, nrm, l) * (1.0f - wb) + set_term(sb_, nrm, l) * wb;  // (approximate: the game blends the rows)
+            const glm::vec3 sum = glm::min(base + t[0] + t[1], glm::vec3(255.0f));
+            const uint32_t lc = lwu(lit + 4 * v);
+            const glm::vec3 got_c(static_cast<float>(lc & 0xff), static_cast<float>((lc >> 8) & 0xff), static_cast<float>((lc >> 16) & 0xff));
+            auto lum = [](const glm::vec3& x) { return (x.r + x.g + x.b) / 3.0; };
+            sum_base += lum(base);
+            sum_t[0] += lum(t[0]);
+            sum_t[1] += lum(t[1]);
+            sum_lit += lum(got_c);
+            sum_err += std::fabs(lum(sum) - lum(got_c));
+            back += glm::dot(nrm, g_sh.sun) <= 0.0f ? 1 : 0;
+            neg_key += lum(t[0]) < 0.0 ? 1 : 0;
+            ++set_use[sa_ | (sb_ << 4)];
+            ++verts;
+        }
+    }
+    if (verts == 0) return;
+    std::printf("[tfrag light] at %.1f %.1f %.1f r %.0f: %d vertices; mean (0..255) lit %.1f = base %.1f + light 1 %.1f + light 2 %.1f (recomposed off by %.1f); "
+                "facing away from the sun %d, light 1 negative %d; sets", px, py, pz, pr, verts, sum_lit / verts, sum_base / verts, sum_t[0] / verts, sum_t[1] / verts,
+                sum_err / verts, back, neg_key);
+    for (const auto& [k, c] : set_use) std::printf(" %u/%u:%d", k & 15, k >> 4, c);
+    std::printf("; sun (%.2f %.2f %.2f) weight %.2f\n", g_sh.sun.x, g_sh.sun.y, g_sh.sun.z, g_sh.sun_k);
 }
 
 void read_splits() {
@@ -296,18 +423,49 @@ void fit_cascades() {
     g_sh.cam = glm::vec3(g_sh.inv_view[3]);
     {  // the zone's sun: turned toward a new zone's at most 1 degree a frame, its shadows' weight faded (1 / 30 a frame)
         float tw = 0.0f;
-        const glm::vec3 target = sun_direction(&tw);
+        glm::vec4 tkey(0.0f);
+        glm::vec3 tkey_dir(0.0f, 0.0f, 1.0f);
+        const glm::vec3 target = sun_direction(&tw, &tkey, &tkey_dir);
         const float zone_w = tw;
-        tw *= view_open();  // (a view covered from the sun: its shadows faded out, the cascades still drawn - the probe's)
+        tw *= view_open();  // (testing, RAC1_SUN_COVER=1: a view covered from the sun - its shadows faded out, the cascades still drawn)
+        {  // the level's interiors: the camera in one of its boxes, or the hero lit with one of its light sets
+            user_ensure();
+            bool inside = false;
+            for (const SunInterior& b : g_interiors)
+                inside = inside || (g_sh.cam.x >= b.lo[0] && g_sh.cam.y >= b.lo[1] && g_sh.cam.z >= b.lo[2] && g_sh.cam.x <= b.hi[0] && g_sh.cam.y <= b.hi[1] &&
+                                    g_sh.cam.z <= b.hi[2]);
+            g_interior_hero_set = -1;
+            if (const uint32_t hero = lwu(OV(0x0015ffd8u)); hero != 0) g_interior_hero_set = lbu(hero + 0x38);
+            for (int n : g_interior_sets) inside = inside || n == g_interior_hero_set;
+            static int32_t ilvl = -1;
+            const float want = inside ? 1.0f : 0.0f;
+            if (lw(0x0015ed84) != ilvl) {
+                ilvl = lw(0x0015ed84);
+                g_interior_k = want;
+            } else {
+                g_interior_k += std::clamp(want - g_interior_k, -1.0f / kInteriorFade, 1.0f / kInteriorFade);
+            }
+        }
         static glm::vec3 cur{0.0f, 0.0f, 1.0f};
         static float curw = 0.0f;
         static int32_t lvl = -1;
         const int32_t level = lw(0x0015ed84);
+        static glm::vec4 curkey{0.0f};
+        static glm::vec3 curkey_dir{0.0f, 0.0f, 1.0f};
         if (level != lvl) {
             lvl = level;
             cur = target;
             curw = tw;
+            curkey = tkey;
+            curkey_dir = tkey_dir;
+        } else if (g_sun_snap) {  // (the debug menu's sun editor: at once)
+            cur = target;
+            curw = tw;
+            g_sun_snap = false;
         } else {
+            curkey += (tkey - curkey) * 0.1f;  // (a new zone's key light's colour and direction: over about half a second)
+            const glm::vec3 kd = curkey_dir + (tkey_dir - curkey_dir) * 0.1f;
+            if (glm::dot(kd, kd) > 1e-6f) curkey_dir = glm::normalize(kd);
             curw += std::clamp(tw - curw, -1.0f / 30.0f, 1.0f / 30.0f);
             if (curw <= 0.02f) {
                 cur = target;  // (unseen: at once)
@@ -318,14 +476,17 @@ void fit_cascades() {
             }
         }
         g_sh.sun = cur;
-        g_sh.sun_k = curw;
-        g_has_sun.store(curw > 0.01f);
-        g_casc_on.store(curw > 0.01f || zone_w > 0.01f);
+        g_sh.sun_k = curw * (1.0f - g_interior_k);  // (an interior: faded out apart from the zone's own fade)
+        g_sh.key = curkey;
+        g_sh.key_dir = curkey_dir;
+        g_has_sun.store(g_sh.sun_k > 0.01f);
+        g_casc_on.store(g_sh.sun_k > 0.01f || (cover_probe_on() && zone_w > 0.01f));
     }
     for (int i = 0; i < 3; ++i) g_cull_sun[i] = g_sh.sun[i];  // (the casters' search of the next frames: the level's sun is fixed)
     g_cull_tan[0] = 1.0f / g_sh.proj.x;
     g_cull_tan[1] = 1.0f / g_sh.proj.y;
     g_sun_known.store(true);
+    tfrag_light_trace();
     const glm::vec3 up = std::fabs(g_sh.sun.z) > 0.95f ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::vec3(0.0f, 0.0f, 1.0f);
     const float tx = 1.0f / g_sh.proj.x, ty = 1.0f / g_sh.proj.y;
     float near_d = 0.1f;
@@ -536,7 +697,7 @@ void point_shadows_pass() {
         std::pair<float, int> want[kMaxPts];
         int nwant = 0;
         for (int i = 0; i < g_sh.npts; ++i) {
-            if (g_sh.pt_slot[i] >= 0) continue;
+            if (g_sh.pt_slot[i] >= 0 || g_sh.pt_slot[i] == -2) continue;  // (-2: a moby's own lamp - its mesh would hide it)
             const float p[3] = {g_sh.pt_pos[i].x, g_sh.pt_pos[i].y, g_sh.pt_pos[i].z};
             const float d = mrp_moby_nearest_part(p) / g_sh.pt_pos[i].w;
             if (d < 1.0f) want[nwant++] = {d, i};
@@ -706,7 +867,16 @@ void main() {
     float noise2 = fract(52.9829189 * fract(dot(gl_FragCoord.xy + vec2(17.0, 31.0), vec2(0.06711056, 0.00583715))));
     vec3 t = normalize(abs(N.z) < 0.9 ? cross(N, vec3(0.0, 0.0, 1.0)) : cross(N, vec3(1.0, 0.0, 0.0)));
     vec3 b = cross(N, t);
-    float R = uParam.x, invR2 = 1.0 / max(R * R, 1e-4);
+    float R = uParam.x;
+    {  // (the reach capped on the screen: a surface near the camera looks no further than 4 % of the view's height - the taps
+       // far apart on the screen were most of the cost, for an occlusion that hardly changes)
+        vec4 c0 = uVP * vec4(P, 1.0), c1 = uVP * vec4(P + b * R, 1.0);
+        if (c0.w > 0.0 && c1.w > 0.0) {
+            float px = length(c1.xy / c1.w - c0.xy / c0.w) * 0.5;
+            if (px > 0.04) R *= 0.04 / px;
+        }
+    }
+    float invR2 = 1.0 / max(R * R, 1e-4);
 
     if (mode <= 2) {
         float a = 6.2831853 * noise;
@@ -811,9 +981,9 @@ void main() {
                 }
             }
         }
-        float a1 = acos(clamp(h1, -1.0, 1.0));
-        float a2 = acos(clamp(h2, -1.0, 1.0));
-        float slice_vis = 0.5 * ((1.0 - cos(a1)) + (1.0 - cos(a2)));
+        // (h: the sine of each side's horizon's elevation over the surface's plane; the cosine-weighted share of a side's quarter
+        // circle above its horizon is 1 - sin(elevation): a free side 1, a wall up to the normal 0)
+        float slice_vis = 0.5 * ((1.0 - max(h1, 0.0)) + (1.0 - max(h2, 0.0)));
         vis += clamp(slice_vis, 0.0, 1.0);
     }
     vis /= float(D);
@@ -903,6 +1073,193 @@ struct Ao {
     GLint u_bs_depth = -1, u_bs_ao = -1, u_bs_texel = -1;
 } g_ao_s;
 
+// ---- the sun's rays (Options > Graphics > Sun Rays) ------------------------------------------------------------------------
+//
+// Our choice, not the game's: light shafts from the sun where the sky shows through the scene (a tunnel's mouth, the gaps between
+// trees). A quarter of the resolution, screen space: (1) the sky's texels (depth 1) near the sun's place on the screen, their colour tinted by
+// the key light, the rest black; (2) a radial blur of that toward the sun (40 taps, each further one weaker); (3) added to the
+// picture (Low / High: a little / more), faded when the sun leaves the screen or is behind the camera, and with the sun's weight
+// (no rays where the zone has no sun, in the level's interiors, in a zone fading), at most +0.28 / +0.45 a texel (a soft limit: a
+// wide sky in front of the sun does not burn the picture white). Before the effects, the particles and the 2D.
+const char* kRaysMaskFs = R"(#version 460 core
+in vec2 vUv;
+uniform sampler2D uDepth, uColor;
+uniform vec2 uSun;      // the sun's place, 0..1 of the view
+uniform vec2 uAspect;   // (the view's width / height, 1: distances in the screen's proportions)
+uniform vec3 uTint;     // the key light's colour, its largest channel 1
+out vec4 FragColor;
+void main() {
+    float d = texture(uDepth, vUv).r;
+    if (d < 1.0) { FragColor = vec4(0.0); return; }
+    vec3 c = texture(uColor, vUv).rgb;
+    vec2 v = (vUv - uSun) * uAspect;
+    float k = exp(-dot(v, v) * 6.0);  // (the sky near the sun)
+    float lum = dot(c, vec3(0.299, 0.587, 0.114));
+    FragColor = vec4(mix(c, uTint * lum, 0.5) * k, 1.0);
+}
+)";
+const char* kRaysBlurFs = R"(#version 460 core
+in vec2 vUv;
+uniform sampler2D uMask;
+uniform vec2 uSun;
+uniform vec4 uParam;  // x density (how far toward the sun the taps reach), y decay, z weight, w exposure
+out vec4 FragColor;
+void main() {
+    const int N = 40;
+    vec2 delta = (vUv - uSun) * (uParam.x / float(N));
+    float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    vec2 uv = vUv - delta * noise;  // (dithered start: no rings)
+    vec3 sum = vec3(0.0);
+    float decay = 1.0;
+    for (int i = 0; i < N; ++i) {
+        uv -= delta;
+        sum += texture(uMask, uv).rgb * decay * uParam.z;
+        decay *= uParam.y;
+    }
+    FragColor = vec4(sum * uParam.w, 1.0);
+}
+)";
+const char* kRaysAddFs = R"(#version 460 core
+in vec2 vUv;
+uniform sampler2D uRays;
+uniform float uK, uCap;  // (the gain, and the most a texel gets: a wide sky in front of the sun does not burn the picture white)
+out vec4 FragColor;
+void main() { FragColor = vec4(uCap * (1.0 - exp(-texture(uRays, vUv).rgb * uK / uCap)), 0.0); }
+)";
+struct Rays {
+    GLuint mask = 0, blur = 0, add = 0, vao = 0;
+    GLuint dfbo = 0, dtex = 0, cfbo = 0, ctex = 0, mfbo = 0, mtex = 0, rfbo = 0, rtex = 0;
+    int w = 0, h = 0;
+    GLenum dfmt = 0;
+    GLint last_fb = -1;
+} g_rays;
+// orig: (host) the depth format of a framebuffer (a blit of its depth wants the same)
+GLenum depth_format(GLint fb) {
+    GLint dbits = 24, sbits = 8, dtype = GL_UNSIGNED_NORMALIZED;
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(fb));
+    const GLenum datt = fb == 0 ? GL_DEPTH : GL_DEPTH_ATTACHMENT, satt = fb == 0 ? GL_STENCIL : GL_STENCIL_ATTACHMENT;
+    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, datt, GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &dbits);
+    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, datt, GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &dtype);
+    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, satt, GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, &sbits);
+    while (glGetError() != GL_NO_ERROR) {}
+    return dtype == GL_FLOAT ? (sbits > 0 ? GL_DEPTH32F_STENCIL8 : GL_DEPTH_COMPONENT32F)
+                             : (sbits > 0 ? GL_DEPTH24_STENCIL8 : (dbits >= 32 ? GL_DEPTH_COMPONENT32 : dbits >= 24 ? GL_DEPTH_COMPONENT24 : GL_DEPTH_COMPONENT16));
+}
+// orig: (host) the sun's rays added to the bound framebuffer's 3D (see kRaysMaskFs); the caller saves and restores the GL state
+void sun_rays_pass(GLint fb, const int vp[4]) {
+    if (g_sun_rays <= 0 || !(g_sh.sun_k > 0.01f)) return;
+    float vpf[16];
+    mrp_world_view_proj(vpf);
+    const glm::mat4 VP = glm::make_mat4(vpf);
+    const glm::vec4 c = VP * glm::vec4(g_sh.cam + g_sh.sun * 2000.0f, 1.0f);
+    if (!(c.w > 0.0f)) return;  // (behind the camera)
+    const glm::vec2 su = glm::vec2(c.x, c.y) / c.w * 0.5f + 0.5f;
+    // (on screen: full; fading out to 0.6 of the view beyond its edge)
+    const float out = std::max({-su.x, su.x - 1.0f, -su.y, su.y - 1.0f, 0.0f});
+    const float fade = std::clamp(1.0f - out / 0.6f, 0.0f, 1.0f);
+    if (!(fade > 0.0f)) return;
+    Rays& R = g_rays;
+    const int w = vp[2], h = vp[3], hw = std::max(1, w / 4), hh = std::max(1, h / 4);  // (a quarter: the shafts are soft)
+    if (R.mask == 0) {
+        R.mask = ao_link(kRaysMaskFs);
+        R.blur = ao_link(kRaysBlurFs);
+        R.add = ao_link(kRaysAddFs);
+        glGenVertexArrays(1, &R.vao);
+        GLuint f[4], t[4];
+        glGenFramebuffers(4, f);
+        glGenTextures(4, t);
+        R.dfbo = f[0], R.cfbo = f[1], R.mfbo = f[2], R.rfbo = f[3];
+        R.dtex = t[0], R.ctex = t[1], R.mtex = t[2], R.rtex = t[3];
+    }
+    GLenum fmt = R.dfmt;
+    if (fb != R.last_fb || fmt == 0) {
+        fmt = depth_format(fb);
+        R.last_fb = fb;
+    }
+    const bool st = fmt == GL_DEPTH24_STENCIL8 || fmt == GL_DEPTH32F_STENCIL8;
+    if (R.w != w || R.h != h || R.dfmt != fmt) {
+        R.w = w;
+        R.h = h;
+        R.dfmt = fmt;
+        auto tex = [](GLuint t, GLint ifmt, int tw, int th, GLenum f2, GLenum ty, GLint filter) {
+            glBindTexture(GL_TEXTURE_2D, t);
+            glTexImage2D(GL_TEXTURE_2D, 0, ifmt, tw, th, 0, f2, ty, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        };
+        tex(R.dtex, static_cast<GLint>(fmt), hw, hh, st ? GL_DEPTH_STENCIL : GL_DEPTH_COMPONENT,
+            fmt == GL_DEPTH24_STENCIL8 ? GL_UNSIGNED_INT_24_8 : fmt == GL_DEPTH32F_STENCIL8 ? GL_FLOAT_32_UNSIGNED_INT_24_8_REV : GL_FLOAT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, R.dfbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, st ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, R.dtex, 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+        tex(R.ctex, GL_RGBA8, hw, hh, GL_RGBA, GL_UNSIGNED_BYTE, GL_LINEAR);
+        glBindFramebuffer(GL_FRAMEBUFFER, R.cfbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, R.ctex, 0);
+        tex(R.mtex, GL_RGBA16F, hw, hh, GL_RGBA, GL_FLOAT, GL_LINEAR);
+        glBindFramebuffer(GL_FRAMEBUFFER, R.mfbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, R.mtex, 0);
+        tex(R.rtex, GL_RGBA16F, hw, hh, GL_RGBA, GL_FLOAT, GL_LINEAR);
+        glBindFramebuffer(GL_FRAMEBUFFER, R.rfbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, R.rtex, 0);
+    }
+    // the 3D's depth (nearest) and colour (linear) at half size
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(fb));
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.dfbo);
+    glBlitFramebuffer(vp[0], vp[1], vp[0] + w, vp[1] + h, 0, 0, hw, hh, GL_DEPTH_BUFFER_BIT | (st ? GL_STENCIL_BUFFER_BIT : 0), GL_NEAREST);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.cfbo);
+    glBlitFramebuffer(vp[0], vp[1], vp[0] + w, vp[1] + h, 0, 0, hw, hh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glDisable(GL_BLEND);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBindVertexArray(R.vao);
+    glViewport(0, 0, hw, hh);
+    const float tmax = std::max({g_sh.key.x, g_sh.key.y, g_sh.key.z, 1e-3f});
+    const glm::vec3 tint = g_sh.key.x + g_sh.key.y + g_sh.key.z > 0.0f ? glm::vec3(g_sh.key) / tmax : glm::vec3(1.0f, 0.95f, 0.85f);
+    // (1) the mask
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.mfbo);
+    glUseProgram(R.mask);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, R.dtex);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, R.ctex);
+    glUniform1i(glGetUniformLocation(R.mask, "uDepth"), 0);
+    glUniform1i(glGetUniformLocation(R.mask, "uColor"), 1);
+    glUniform2f(glGetUniformLocation(R.mask, "uSun"), su.x, su.y);
+    glUniform2f(glGetUniformLocation(R.mask, "uAspect"), static_cast<float>(w) / static_cast<float>(std::max(h, 1)), 1.0f);
+    glUniform3f(glGetUniformLocation(R.mask, "uTint"), tint.x, tint.y, tint.z);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    // (2) the radial blur
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.rfbo);
+    glUseProgram(R.blur);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, R.mtex);
+    glUniform1i(glGetUniformLocation(R.blur, "uMask"), 0);
+    glUniform2f(glGetUniformLocation(R.blur, "uSun"), su.x, su.y);
+    glUniform4f(glGetUniformLocation(R.blur, "uParam"), 0.9f, 0.945f, 1.0f / 40.0f * 4.0f, 1.0f);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    // (3) added to the picture
+    static const float gain_env = std::getenv("RAC1_SUN_RAYS_GAIN") != nullptr ? static_cast<float>(std::atof(std::getenv("RAC1_SUN_RAYS_GAIN"))) : 1.0f;  // (testing)
+    const float k = (g_sun_rays >= 2 ? 7.0f : 3.5f) * gain_env * fade * std::min(g_sh.sun_k, 1.0f);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(fb));
+    glViewport(vp[0], vp[1], w, h);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    glUseProgram(R.add);
+    glBindTexture(GL_TEXTURE_2D, R.rtex);
+    glUniform1i(glGetUniformLocation(R.add, "uRays"), 0);
+    glUniform1f(glGetUniformLocation(R.add, "uK"), k);
+    glUniform1f(glGetUniformLocation(R.add, "uCap"), (g_sun_rays >= 2 ? 0.45f : 0.28f) * std::max(fade * std::min(g_sh.sun_k, 1.0f), 1e-3f));
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glDisable(GL_BLEND);
+    if (std::getenv("RAC1_SUN_RAYS_TRACE") != nullptr) {
+        static uint64_t n = 0;
+        if (n++ % 60 == 0) std::printf("[rays] sun at %.2f %.2f of the view, fade %.2f, weight %.2f: %.2f\n", su.x, su.y, fade, g_sh.sun_k, k);
+    }
+}
+
 // ---- the view covered from the sun -----------------------------------------------------------------------------------
 //
 // Our choice, not the game's: a room, a corridor, a ship's hold is lit by its zone's key light, which comes from above, but the
@@ -911,10 +1268,18 @@ struct Ao {
 // neighbours), tested against the cascades (one tap, a few texels toward the sun) when it faces the sun - a face turned away is
 // not counted, as the receivers do not shadow it -, the sky as seeing it. Read back the next frame (a pixel buffer): the sun's
 // weight is scaled by how much of the view sees the sun - none under kCoverLo, all over kCoverHi, the scale following it slowly
-// (kCoverRate a frame, about a second), then faded as between zones. In a room, the original's look (the mobys' drop shadows back);
-// outdoors, where the ground in the sun or the sky shows, the shadows as before.
+// (kCoverRate a frame, about a second), then faded as between zones. In a room, the original's look (the point lights and the
+// occlusion on top); outdoors, where the ground in the sun or the sky shows, the shadows as before.
+// Outdoors besides: where the camera is where the sky was in view (kSkySeen of the samples, any time since the level began),
+// the sun is kept whatever the view shows. Outdoors a camera often looks at nothing but shaded ground (down at Novalis's
+// start valley, all in the shade of its trees and of the plateau beside it): that view alone faded the sun out, the trees' and
+// Ratchet's shadows went and came back as the camera turned. A room shows no sky. The places are the camera's positions, one
+// every kSkyStep units, kSkyMax of them (the oldest dropped); within kSkyNear of one the sun is kept, beyond kSkyFar it is the
+// view's measure alone.
 constexpr int kProbeW = 64, kProbeH = 36;
 constexpr float kCoverLo = 0.05f, kCoverHi = 0.25f, kCoverRate = 0.03f;
+constexpr float kSkySeen = 0.05f, kSkyStep = 4.0f, kSkyNear = 12.0f, kSkyFar = 24.0f;
+constexpr size_t kSkyMax = 1024;
 const char* kProbeFs = R"(#version 460 core
 uniform sampler2D uDepth;
 uniform sampler2DArrayShadow uShMap;
@@ -959,6 +1324,8 @@ struct Probe {
     int next = 0;
     GLint u_depth = -1, u_map = -1, u_casc = -1, u_part = -1, u_texel = -1, u_sun = -1, u_cam = -1, u_inv_vp = -1;
     float open = 1.0f, sky = 1.0f;  // the last measure: the counted samples' share that see the sun, the samples' share of sky
+    std::vector<glm::vec3> sky_at;  // where the camera was when the sky was in view (outdoors)
+    float outdoors = 1.0f;          // the last measure: 1 near one of them .. 0 away from all
     float k = 1.0f;                 // the sun's weight's scale (smoothed)
     int32_t level = -1;
 } g_probe;
@@ -968,7 +1335,7 @@ namespace {
 // orig: (host) the view covered from the sun (see kProbeW): this frame's samples drawn and read into a pixel buffer, the last
 // frame's read (its fence long passed: the map does not wait in practice; always the last frame's - the same picture every run)
 void cover_probe(GLint fb, const int vp[4]) {
-    static const int on = env_int("RAC1_SUN_COVER", 1);  // (testing: 0 off)
+    const bool on = cover_probe_on();
     static const bool trace = std::getenv("RAC1_SUN_COVER_TRACE") != nullptr;
     Probe& P = g_probe;
     const int32_t level = lw(0x0015ed84);
@@ -977,6 +1344,7 @@ void cover_probe(GLint fb, const int vp[4]) {
         P.k = 1.0f;
         P.open = P.sky = 1.0f;
         P.filled[0] = P.filled[1] = false;
+        P.sky_at.clear();
     }
     if (on == 0 || !g_casc_on.load()) {
         P.k = 1.0f;
@@ -1025,14 +1393,30 @@ void cover_probe(GLint fb, const int vp[4]) {
             glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
             P.open = counted > 0 ? static_cast<float>(lit) / (255.0f * static_cast<float>(counted)) : 1.0f;
             P.sky = static_cast<float>(sky) / static_cast<float>(kProbeW * kProbeH);
-            P.k += (std::clamp((P.open - kCoverLo) / (kCoverHi - kCoverLo), 0.0f, 1.0f) - P.k) * kCoverRate;
+            static const int sky_on = env_int("RAC1_SUN_COVER_SKY", 1);  // (testing: 0 the view alone, as in 0.4.0)
+            P.outdoors = 0.0f;
+            if (sky_on != 0) {
+                const glm::vec3 h = g_sh.cam;  // (the camera: Clank's or a vehicle's sections too)
+                float dmin = 1e30f;
+                for (const glm::vec3& q : P.sky_at) dmin = std::min(dmin, glm::length(q - h));
+                if (P.sky >= kSkySeen && dmin > kSkyStep) {
+                    if (P.sky_at.size() >= kSkyMax) P.sky_at.erase(P.sky_at.begin());
+                    P.sky_at.push_back(h);
+                    dmin = 0.0f;
+                }
+                P.outdoors = std::clamp((kSkyFar - dmin) / (kSkyFar - kSkyNear), 0.0f, 1.0f);
+            }
+            const float kv = std::clamp((P.open - kCoverLo) / (kCoverHi - kCoverLo), 0.0f, 1.0f);
+            P.k += (std::max(kv, P.outdoors) - P.k) * kCoverRate;
         }
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         P.filled[prev] = false;
     }
     if (trace) {
         static uint64_t n = 0;
-        if (n++ % 60 == 0) std::printf("[sun] cover probe: %.0f %% sees the sun, %.0f %% sky: the sun's weight x %.2f\n", 100.0f * P.open, 100.0f * P.sky, P.k);
+        if (n++ % 60 == 0)
+            std::printf("[sun] cover probe: %.0f %% sees the sun, %.0f %% sky, outdoors %.2f (%zu places): the sun's weight x %.2f; camera %.1f %.1f %.1f\n", 100.0f * P.open,
+                        100.0f * P.sky, P.outdoors, P.sky_at.size(), P.k, g_sh.cam.x, g_sh.cam.y, g_sh.cam.z);
     }
     // this frame's: the depth at 2 kProbeW x 2 kProbeH (a blit of the same format, nearest)
     GLenum fmt = P.dfmt;
@@ -1108,6 +1492,8 @@ void mrp_lighting_ao_pass() {
     if (!g_sh.on) return;
     int vp[4];
     if (!mrp_world_last_viewport(vp)) return;
+    screen_point_read(vp);
+    lamp_scan(vp);
     GLint fb = 0, rfb = 0, prev_prog = 0, prev_vao = 0, prev_vp[4] = {}, prev_active = 0, prev_t0 = 0, prev_t1 = 0, prev_rb = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &fb);
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
@@ -1136,6 +1522,14 @@ void mrp_lighting_ao_pass() {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(rfb));  // (the read buffer is the bound read framebuffer's: rfb's, not the probe's)
     glReadBuffer(static_cast<GLenum>(prev_rb));
 
+    static const bool ao_prof = std::getenv("RAC1_AO_PROF") != nullptr;  // (testing: the occlusion's GPU time)
+    static GLuint ao_q = 0;
+    static double ao_acc = 0.0;
+    static int ao_n = 0;
+    if (ao_prof && g_ao != 0) {
+        if (ao_q == 0) glGenQueries(1, &ao_q);
+        glBeginQuery(GL_TIME_ELAPSED, ao_q);
+    }
     if (g_ao != 0) {
         Ao& A = g_ao_s;
         const int w = vp[2], h = vp[3];
@@ -1232,7 +1626,15 @@ void mrp_lighting_ao_pass() {
         float vpf[16];
         mrp_world_view_proj(vpf);
         const glm::mat4 VP = glm::make_mat4(vpf), IVP = glm::inverse(VP);
-        static const float radius = static_cast<float>(env_int("RAC1_AO_RADIUS", 90)) / 100.0f, strength = static_cast<float>(env_int("RAC1_AO_STRENGTH", 70)) / 100.0f;  // (testing)
+        // the radius (world units) and strength per mode. Until 0.4.x every mode used 0.9 units and 70 %: on these scenes (a crate
+        // about 2 units, Ratchet about 1.5, buildings tens) that darkened 1 to 2 levels of 255 on average, so the five modes looked
+        // the same (and none showed). The sphere-sampling modes 1.5 units, the horizon-based ones 3 (their falloff is smoother);
+        // RAC1_AO_RADIUS / RAC1_AO_STRENGTH (percent, testing) override them
+        static const int env_r = env_int("RAC1_AO_RADIUS", -1), env_s = env_int("RAC1_AO_STRENGTH", -1);
+        static const float kRadius[6] = {0.0f, 1.5f, 1.5f, 3.0f, 3.0f, 3.0f}, kStrength[6] = {0.0f, 1.0f, 1.2f, 2.0f, 2.5f, 2.5f};
+        const int mi = std::clamp(g_ao, 1, 5);
+        const float radius = env_r >= 0 ? static_cast<float>(env_r) / 100.0f : kRadius[mi];
+        const float strength = env_s >= 0 ? static_cast<float>(env_s) / 100.0f : kStrength[mi];
         const int shader_mode = (g_ao >= 5) ? 4 : g_ao;
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, A.afbo);
         glViewport(0, 0, aw, ah);
@@ -1248,6 +1650,32 @@ void mrp_lighting_ao_pass() {
         glUniform4f(A.u_param, radius, strength, 0.02f, static_cast<float>(shader_mode));
         glDrawArrays(GL_TRIANGLES, 0, 3);
 
+        if (std::getenv("RAC1_AO_DUMP") != nullptr) {  // (testing: the raw occlusion, ao_<mode>.pgm written every frame - the last one stays -, its stats every 60)
+            static int n = 0;
+            ++n;
+            {
+                std::vector<uint8_t> px(static_cast<size_t>(aw) * ah);
+                glBindTexture(GL_TEXTURE_2D, A.atex);
+                glPixelStorei(GL_PACK_ALIGNMENT, 1);
+                glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_UNSIGNED_BYTE, px.data());
+                glPixelStorei(GL_PACK_ALIGNMENT, 4);
+                char fn[64];
+                std::snprintf(fn, sizeof fn, "ao_%d.pgm", g_ao);
+                if (FILE* f = std::fopen(fn, "wb")) {
+                    std::fprintf(f, "P5 %d %d 255\n", aw, ah);
+                    for (int y = ah - 1; y >= 0; --y) std::fwrite(px.data() + static_cast<size_t>(y) * aw, 1, static_cast<size_t>(aw), f);
+                    std::fclose(f);
+                }
+                double sum = 0.0;
+                int dark = 0;
+                for (uint8_t v : px) {
+                    sum += v;
+                    dark += v < 200 ? 1 : 0;
+                }
+                if (n % 60 == 0) std::printf("[ao] mode %d (shader %d) %dx%d: mean %.1f / 255, %.1f %% under 200; radius %.2f strength %.2f\n", g_ao, shader_mode, aw, ah,
+                            sum / static_cast<double>(px.size()), 100.0 * dark / static_cast<double>(px.size()), radius, strength);
+            }
+        }
         glActiveTexture(GL_TEXTURE1);
         glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex1);
         if (g_ao == 1) {
@@ -1292,6 +1720,57 @@ void mrp_lighting_ao_pass() {
         glDepthMask(dmask);
         glBlendFuncSeparate(static_cast<GLenum>(bsrc), static_cast<GLenum>(bdst), static_cast<GLenum>(bsrca), static_cast<GLenum>(bdsta));
     }
+    if (ao_prof && g_ao != 0) {
+        glEndQuery(GL_TIME_ELAPSED);
+        GLuint64 ns = 0;
+        glGetQueryObjectui64v(ao_q, GL_QUERY_RESULT, &ns);
+        ao_acc += static_cast<double>(ns) * 1e-6;
+        if (++ao_n == 60) {
+            std::printf("[ao] mode %d: GPU %.3f ms a frame (%dx%d)\n", g_ao, ao_acc / ao_n, vp[2], vp[3]);
+            ao_acc = 0.0;
+            ao_n = 0;
+        }
+    }
+    if (g_sun_rays > 0) {  // the sun's rays (their own textures; the blending and the bindings put back)
+        GLint bsrc = 0, bdst = 0, bsrca = 0, bdsta = 0, t0 = 0, t1 = 0;
+        glGetIntegerv(GL_BLEND_SRC_RGB, &bsrc);
+        glGetIntegerv(GL_BLEND_DST_RGB, &bdst);
+        glGetIntegerv(GL_BLEND_SRC_ALPHA, &bsrca);
+        glGetIntegerv(GL_BLEND_DST_ALPHA, &bdsta);
+        GLboolean dmask = GL_TRUE;
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &dmask);
+        glDepthMask(GL_FALSE);
+        glActiveTexture(GL_TEXTURE1);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &t1);
+        glActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &t0);
+        static const bool trace = std::getenv("RAC1_SUN_RAYS_TRACE") != nullptr;  // (testing: the pass's GPU time)
+        static GLuint q = 0;
+        static double acc = 0.0;
+        static int nq = 0;
+        if (trace) {
+            if (q == 0) glGenQueries(1, &q);
+            glBeginQuery(GL_TIME_ELAPSED, q);
+        }
+        sun_rays_pass(fb, vp);
+        if (trace) {
+            glEndQuery(GL_TIME_ELAPSED);
+            GLuint64 ns = 0;
+            glGetQueryObjectui64v(q, GL_QUERY_RESULT, &ns);
+            acc += static_cast<double>(ns) * 1e-6;
+            if (++nq == 60) {
+                std::printf("[rays] GPU %.3f ms a frame (%dx%d)\n", acc / nq, vp[2], vp[3]);
+                acc = 0.0;
+                nq = 0;
+            }
+        }
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(t1));
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(t0));
+        glDepthMask(dmask);
+        glBlendFuncSeparate(static_cast<GLenum>(bsrc), static_cast<GLenum>(bdst), static_cast<GLenum>(bsrca), static_cast<GLenum>(bdsta));
+    }
 
     glColorMask(cmask[0], cmask[1], cmask[2], cmask[3]);
     if (blend) glEnable(GL_BLEND);
@@ -1312,6 +1791,7 @@ void mrp_lighting_ao_pass() {
 namespace {
 std::vector<UserLight> g_user;
 std::vector<int> g_user_noauto;  // the tie classes whose automatic emitters are off
+std::vector<ClassLight> g_class_lights;  // the lights per object class ("emit")
 std::vector<std::string> g_user_notes;  // the file's own comment lines (why a class is off), kept when the editor saves it
 int g_user_level = -1;
 std::string g_user_path;
@@ -1326,6 +1806,11 @@ std::string user_path(int level) {
 void user_load(int level) {
     g_user.clear();
     g_user_noauto.clear();
+    g_sun_file = SunFile{};
+    g_interiors.clear();
+    g_interior_sets.clear();
+    g_class_lights.clear();
+    g_sun_snap = true;  // (a level's sun, or the file read again: at once)
     g_user_notes.clear();
     g_user_level = level;
     g_user_path = user_path(level);
@@ -1346,6 +1831,34 @@ void user_load(int level) {
             g_user_noauto.push_back(cls);
             continue;
         }
+        if (SunInterior b; std::sscanf(line, "interior %f %f %f %f %f %f", &b.lo[0], &b.lo[1], &b.lo[2], &b.hi[0], &b.hi[1], &b.hi[2]) == 6) {
+            for (int i = 0; i < 3; ++i)
+                if (b.lo[i] > b.hi[i]) std::swap(b.lo[i], b.hi[i]);
+            g_interiors.push_back(b);
+            continue;
+        }
+        {  // "emit <tie|moby> <class> <ox oy oz> <r g b> <intensity> <radius> [flicker]"
+            ClassLight cl;
+            char kind[8] = {};
+            const int got = std::sscanf(line, "emit %7s %d %f %f %f %f %f %f %f %f %f", kind, &cl.o_class, &cl.off[0], &cl.off[1], &cl.off[2], &cl.col[0], &cl.col[1],
+                                        &cl.col[2], &cl.intensity, &cl.radius, &cl.flicker);
+            if (got >= 10 && (std::strcmp(kind, "tie") == 0 || std::strcmp(kind, "moby") == 0 || std::strcmp(kind, "shrub") == 0)) {
+                cl.moby = std::strcmp(kind, "moby") == 0;
+                cl.shrub = std::strcmp(kind, "shrub") == 0;
+                g_class_lights.push_back(cl);
+                continue;
+            }
+        }
+        if (int n = 0; std::sscanf(line, "interior_set %d", &n) == 1) {
+            g_interior_sets.push_back(n);
+            continue;
+        }
+        if (float az = 0, el = 0; std::sscanf(line, "sun %f %f", &az, &el) == 2) {
+            g_sun_file.on = true;
+            g_sun_file.az = az;
+            g_sun_file.el = std::clamp(el, 5.0f, 90.0f);
+            continue;
+        }
         if (std::sscanf(line, "light %f %f %f %f %f %f %f %f %f %d", &l.pos[0], &l.pos[1], &l.pos[2], &l.col[0], &l.col[1], &l.col[2], &l.intensity, &l.radius,
                         &l.flicker, &on) >= 9) {
             l.on = on != 0;
@@ -1354,8 +1867,59 @@ void user_load(int level) {
     }
     std::fclose(f);
     std::printf("[lights] level %d: %zu lights placed by hand (%s)\n", level, g_user.size(), g_user_path.c_str());
+    if (g_sun_file.on) std::printf("[lights] level %d: the sun turned to azimuth %.1f, elevation %.1f degrees\n", level, g_sun_file.az, g_sun_file.el);
+}
+// orig: (host) the current level's file read when the level changed (its sun is wanted at the shadow pass's start, whatever the
+// secondary lights' setting)
+void user_ensure() {
+    const int level = static_cast<int>(lw(0x0015ed84));
+    if (level != g_user_level) user_load(level);
 }
 }  // namespace
+
+// orig: (host) see mrp_lighting.h
+bool mrp_user_sun(float* az, float* el) {
+    *az = g_sun_file.az;
+    *el = g_sun_file.el;
+    return g_sun_file.on;
+}
+// orig: (host) see mrp_lighting.h
+void mrp_user_sun_set(bool on, float az, float el) {
+    g_sun_snap = true;
+    g_sun_file.on = on;
+    g_sun_file.az = az;
+    g_sun_file.el = std::clamp(el, 5.0f, 90.0f);
+}
+// orig: (host) see mrp_lighting.h
+std::vector<ClassLight>& mrp_user_class_lights() { return g_class_lights; }
+int g_class_light_selected = -1;
+// orig: (host) see mrp_lighting.h
+std::vector<SunInterior>& mrp_user_interiors() { return g_interiors; }
+// orig: (host) see mrp_lighting.h
+std::vector<int>& mrp_user_interior_sets() { return g_interior_sets; }
+// orig: (host) see mrp_lighting.h
+float mrp_lighting_interior(int* hero_set) {
+    *hero_set = g_interior_hero_set;
+    return g_interior_k;
+}
+// orig: (host) see mrp_lighting.h
+bool mrp_lighting_sun_turn(float r[9]) {
+    if (g_modern_shadows == 0 || !g_sun_known.load()) return false;
+    const glm::vec3 a = glm::normalize(g_sh.key_dir), b = glm::normalize(g_sh.sun), ax = glm::cross(a, b);
+    const float cs = glm::dot(a, b), sn = glm::length(ax);
+    if (sn < 1e-4f && cs > 0.0f) return false;
+    glm::mat3 m(1.0f);
+    if (sn >= 1e-4f) m = glm::mat3(glm::rotate(glm::mat4(1.0f), std::atan2(sn, cs), ax / sn));
+    else m = glm::mat3(glm::rotate(glm::mat4(1.0f), glm::pi<float>(), std::fabs(a.z) < 0.9f ? glm::vec3(0, 0, 1) : glm::vec3(1, 0, 0)));
+    std::memcpy(r, glm::value_ptr(m), sizeof(float) * 9);
+    return true;
+}
+// orig: (host) see mrp_lighting.h
+void mrp_lighting_game_sun(float* az, float* el) {
+    const glm::vec3 d = g_sh.key_dir;
+    *az = glm::degrees(std::atan2(d.y, d.x));
+    *el = glm::degrees(std::asin(std::clamp(d.z, -1.0f, 1.0f)));
+}
 
 // orig: (host) see mrp_lighting.h
 std::vector<UserLight>& mrp_user_lights() { return g_user; }
@@ -1386,6 +1950,14 @@ bool mrp_user_lights_save() {
     std::fprintf(f, "# rac1-native: lights placed by hand for level %d (the debug menu's Lights tab)\n", g_user_level);
     std::fprintf(f, "# light x y z  r g b  intensity radius flicker on\n");
     for (const std::string& n : g_user_notes) std::fprintf(f, "%s\n", n.c_str());
+    if (g_sun_file.on) std::fprintf(f, "sun %.1f %.1f\n", g_sun_file.az, g_sun_file.el);
+    for (int n : g_interior_sets) std::fprintf(f, "interior_set %d\n", n);
+    for (const ClassLight& cl : g_class_lights)
+        if (cl.on)
+            std::fprintf(f, "emit %s %d  %.3f %.3f %.3f  %.3f %.3f %.3f  %.3f %.3f %.3f\n", cl.moby ? "moby" : cl.shrub ? "shrub" : "tie", cl.o_class, cl.off[0], cl.off[1], cl.off[2], cl.col[0],
+                         cl.col[1], cl.col[2], cl.intensity, cl.radius, cl.flicker);
+    for (const SunInterior& b : g_interiors)
+        std::fprintf(f, "interior %.1f %.1f %.1f  %.1f %.1f %.1f\n", b.lo[0], b.lo[1], b.lo[2], b.hi[0], b.hi[1], b.hi[2]);
     for (int c : g_user_noauto) std::fprintf(f, "noauto %d\n", c);
     for (const UserLight& l : g_user)
         std::fprintf(f, "light %.3f %.3f %.3f  %.3f %.3f %.3f  %.3f %.3f %.3f %d\n", l.pos[0], l.pos[1], l.pos[2], l.col[0], l.col[1], l.col[2], l.intensity, l.radius,
@@ -1396,9 +1968,6 @@ bool mrp_user_lights_save() {
 
 // orig: (host) see mrp_lighting.h
 bool mrp_lighting_casters_wanted() { return g_casc_on.load() && (g_shadow_cache == 0 || g_sh.want.load()); }
-
-// orig: (host) see mrp_lighting.h
-bool mrp_lighting_has_sun() { return g_has_sun.load(); }
 
 // orig: (host) see mrp_lighting.h
 float mrp_lighting_caster_grow() { return g_shadow_cache != 0 ? kCacheGrow : 1.0f; }
@@ -1446,6 +2015,325 @@ bool mrp_lighting_cull_params(float sun[3], float splits[3], float* back, float*
     *back = kBack;
     return true;
 }
+
+namespace {
+float g_pick_uv[2] = {-1.0f, -1.0f};  // (the point of the screen asked: 0..1 of the 3D's viewport, from the bottom left)
+bool g_pick_ok = false;
+float g_pick_world[3] = {0.0f, 0.0f, 0.0f};
+// orig: (host) the asked screen point's world position: the 3D's depth there (after the world and the mobys, before the effects)
+// through the world's view-projection inverted
+// orig: (host) testing, RAC1_LAMP_SCAN=<every>: every that many frames the 3D picture (before the effects) is read, its bright
+// texels (luma >= 0.8) not on the sky taken through the depth to the world and to the objects there (mrp_lighting_pick); per class
+// how often, the mean colour and a place, printed at the level's end and every 600 frames: a survey of what glows on screen
+float hue_deg(float r, float g, float b) {
+    const float mx = std::max({r, g, b}), mn = std::min({r, g, b});
+    if (!(mx - mn > 1e-6f)) return 0.0f;
+    const float h = mx == r ? std::fmod((g - b) / (mx - mn), 6.0f) : mx == g ? (b - r) / (mx - mn) + 2.0f : (r - g) / (mx - mn) + 4.0f;
+    return h < 0.0f ? h * 60.0f + 360.0f : h * 60.0f;
+}
+void lamp_scan(const int vp[4]) {
+    static int every = -1, from = 0;
+    if (every < 0) {  // (RAC1_LAMP_SCAN=<every>[,<from frame>])
+        every = 0;
+        if (const char* e = std::getenv("RAC1_LAMP_SCAN")) {
+            std::sscanf(e, "%d,%d", &every, &from);
+            every = std::max(1, every);
+        }
+    }
+    if (every == 0) return;
+    static uint64_t n = 0;
+    ++n;
+    struct Acc {
+        int hits = 0;
+        double c[3] = {0, 0, 0};
+        float at[3] = {0, 0, 0};
+    };
+    static std::map<std::pair<int, int>, Acc> acc;  // (kind 0 tie, 1 shrub, 2 moby, 3 none; class)
+    if (n % 600 == 0 && !acc.empty()) {
+        std::printf("[lamps] level %d, %llu frames:\n", static_cast<int>(lw(0x0015ed84)), static_cast<unsigned long long>(n));
+        for (const auto& [k, a] : acc)
+            if (a.hits >= 3)
+                std::printf("[lamps]   %s %d: %d hits, colour %.2f %.2f %.2f, e.g. at %.1f %.1f %.1f\n", k.first == 0 ? "tie" : k.first == 1 ? "shrub" : k.first == 2 ? "moby" : "world",
+                            k.second, a.hits, a.c[0] / a.hits, a.c[1] / a.hits, a.c[2] / a.hits, a.at[0], a.at[1], a.at[2]);
+    }
+    if (n % static_cast<uint64_t>(every) != 0 || n < static_cast<uint64_t>(from)) return;
+    const int w = vp[2], h = vp[3];
+    std::vector<uint8_t> col(static_cast<size_t>(w) * h * 4);
+    std::vector<float> dep(static_cast<size_t>(w) * h);
+    GLint rfb = 0, dfb = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &dfb);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(dfb));
+    glReadPixels(vp[0], vp[1], w, h, GL_RGBA, GL_UNSIGNED_BYTE, col.data());
+    glReadPixels(vp[0], vp[1], w, h, GL_DEPTH_COMPONENT, GL_FLOAT, dep.data());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(rfb));
+    float m[16];
+    mrp_world_view_proj(m);
+    const glm::mat4 inv = glm::inverse(glm::make_mat4(m));
+    for (int y = 2; y < h; y += 6)
+        for (int x = 2; x < w; x += 6) {
+            const size_t i = static_cast<size_t>(y) * w + x;
+            const float d = dep[i];
+            if (!(d < 1.0f)) continue;
+            const float r = col[4 * i] / 255.0f, g = col[4 * i + 1] / 255.0f, b = col[4 * i + 2] / 255.0f;
+            const float mx = std::max({r, g, b}), mn = std::min({r, g, b});
+            const float hue = hue_deg(r, g, b);
+            // (bright, and white, cool or strongly coloured: a sunlit leaf or a sandy rock is a warm, half-saturated colour)
+            if (0.299f * r + 0.587f * g + 0.114f * b < 0.75f || !(mx - mn <= 0.2f * mx || (hue >= 160.0f && hue <= 300.0f) || (mx - mn) >= 0.75f * mx)) continue;
+            const glm::vec4 wp = inv * glm::vec4((x + 0.5f) / w * 2.0f - 1.0f, (y + 0.5f) / h * 2.0f - 1.0f, d * 2.0f - 1.0f, 1.0f);
+            const float p[3] = {wp.x / wp.w, wp.y / wp.w, wp.z / wp.w};
+            const LightPick pk = mrp_lighting_pick(p);
+            const std::pair<int, int> key = pk.shrub ? std::make_pair(1, pk.shrub_class) : pk.tie ? std::make_pair(0, pk.tie_class)
+                                          : pk.moby && pk.moby_dist < 3.0f ? std::make_pair(2, pk.moby_class) : std::make_pair(3, 0);
+            Acc& a = acc[key];
+            ++a.hits;
+            a.c[0] += r;
+            a.c[1] += g;
+            a.c[2] += b;
+            for (int k = 0; k < 3; ++k) a.at[k] = p[k];
+        }
+}
+void screen_point_read(const int vp[4]) {
+    static float env_uv[2] = {-2.0f, -2.0f};
+    if (env_uv[0] == -2.0f) {  // (testing: RAC1_PICK_SCREEN=u,v - the point printed with its objects every 60 frames)
+        env_uv[0] = -1.0f;
+        if (const char* e = std::getenv("RAC1_PICK_SCREEN")) std::sscanf(e, "%f,%f", &env_uv[0], &env_uv[1]);
+    }
+    if (env_uv[0] >= 0.0f) {
+        g_pick_uv[0] = env_uv[0];
+        g_pick_uv[1] = env_uv[1];
+    }
+    if (g_pick_uv[0] < 0.0f) return;
+    const int x = vp[0] + static_cast<int>(g_pick_uv[0] * static_cast<float>(vp[2])), y = vp[1] + static_cast<int>(g_pick_uv[1] * static_cast<float>(vp[3]));
+    float d = 1.0f;
+    GLint rfb = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
+    GLint dfb = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &dfb);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(dfb));
+    glReadPixels(x, y, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &d);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(rfb));
+    g_pick_ok = d < 1.0f;
+    if (g_pick_ok) {
+        float m[16];
+        mrp_world_view_proj(m);
+        const glm::vec4 w = glm::inverse(glm::make_mat4(m)) * glm::vec4(g_pick_uv[0] * 2.0f - 1.0f, g_pick_uv[1] * 2.0f - 1.0f, d * 2.0f - 1.0f, 1.0f);
+        for (int k = 0; k < 3; ++k) g_pick_world[k] = w[k] / w.w;
+    }
+    if (env_uv[0] >= 0.0f) {
+        static uint64_t n = 0;
+        if (n++ % 60 == 30 && g_pick_ok) {
+            const LightPick pk = mrp_lighting_pick(g_pick_world);
+            std::printf("[lights] screen %.2f %.2f: %.2f %.2f %.2f; tie %d class %d offset %.3f %.3f %.3f; shrub %d class %d offset %.3f %.3f %.3f; moby %d class %d (%.2f away)\n",
+                        g_pick_uv[0], g_pick_uv[1], g_pick_world[0], g_pick_world[1], g_pick_world[2], pk.tie ? 1 : 0, pk.tie_class, pk.tie_off[0], pk.tie_off[1], pk.tie_off[2],
+                        pk.shrub ? 1 : 0, pk.shrub_class, pk.shrub_off[0], pk.shrub_off[1], pk.shrub_off[2], pk.moby ? 1 : 0, pk.moby_class, pk.moby_dist);
+        }
+    }
+}
+}  // namespace
+
+// orig: (host) see mrp_lighting.h
+bool mrp_lighting_screen_point(float u, float v, float out[3]) {
+    g_pick_uv[0] = u;
+    g_pick_uv[1] = v;
+    for (int k = 0; k < 3; ++k) out[k] = g_pick_world[k];
+    return g_pick_ok;
+}
+
+// orig: (host) see mrp_lighting.h
+LightPick mrp_lighting_pick(const float p[3]) {
+    LightPick r;
+    const glm::vec3 P(p[0], p[1], p[2]);
+    float best = 1e30f;
+    float best_shrub = 1e30f;
+    for (const TieSpot& t : mrp_world_tie_instances()) {
+        const glm::vec3 d = P - glm::vec3(t.pos[0], t.pos[1], t.pos[2]);
+        if (glm::dot(d, d) > 400.0f * 400.0f) continue;
+        if (t.shrub) {  // (a shrub: its bounding sphere, the smallest holding the point)
+            const float ds = glm::length(P - glm::vec3(t.sphere[0], t.sphere[1], t.sphere[2]));
+            if (ds <= t.sphere[3] + 0.2f && t.sphere[3] < best_shrub) {
+                best_shrub = t.sphere[3];
+                r.shrub = true;
+                r.shrub_class = t.o_class;
+                const glm::mat3 M(glm::vec3(t.rows[0][0], t.rows[0][1], t.rows[0][2]), glm::vec3(t.rows[1][0], t.rows[1][1], t.rows[1][2]),
+                                  glm::vec3(t.rows[2][0], t.rows[2][1], t.rows[2][2]));
+                const glm::vec3 l = std::fabs(glm::determinant(M)) > 1e-12f ? glm::inverse(M) * d : glm::vec3(0.0f);
+                for (int k = 0; k < 3; ++k) r.shrub_off[k] = l[k];
+            }
+            continue;
+        }
+        const glm::mat3 M(glm::vec3(t.rows[0][0], t.rows[0][1], t.rows[0][2]), glm::vec3(t.rows[1][0], t.rows[1][1], t.rows[1][2]),
+                          glm::vec3(t.rows[2][0], t.rows[2][1], t.rows[2][2]));  // (columns: world = pos + M l)
+        if (std::fabs(glm::determinant(M)) < 1e-12f) continue;
+        const glm::vec3 l = glm::inverse(M) * d;
+        bool in = true;
+        float vol = 1.0f;
+        for (int k = 0; k < 3; ++k) {
+            const float m = 0.15f;
+            in = in && l[k] >= t.lo[k] - m && l[k] <= t.hi[k] + m;
+            vol *= std::max(t.hi[k] - t.lo[k], 0.05f);
+        }
+        if (in && vol < best) {
+            best = vol;
+            r.tie = true;
+            r.tie_class = t.o_class;
+            for (int k = 0; k < 3; ++k) r.tie_off[k] = l[k];
+        }
+    }
+    const uint32_t first = lwu(OV(0x0015ffd8u)), last = lwu(OV(0x0015ffdcu));
+    r.moby_dist = 6.0f;  // (a moby whose origin is at its foot: a door frame, a lamp post)
+    for (uint32_t m = first; m != 0 && m < 0x01fe0000u && (last == 0 || m <= last) && lbu(m + 0x20) != 0xff; m += 0x100) {
+        if (static_cast<int8_t>(lbu(m + 0x20)) < 0) continue;
+        const glm::vec3 mp(lwc1(m + 0x10), lwc1(m + 0x14), lwc1(m + 0x18));
+        const float d = glm::length(P - mp);
+        if (d >= r.moby_dist) continue;
+        r.moby = true;
+        r.moby_dist = d;
+        r.moby_class = lh(m + 0xa6);
+        for (uint32_t k = 0; k < 3; ++k) {  // (the point in the moby's frame: its rows normalised)
+            glm::vec3 row(lwc1(m + 0xc0 + 0x10 * k), lwc1(m + 0xc4 + 0x10 * k), lwc1(m + 0xc8 + 0x10 * k));
+            const float len = glm::length(row);
+            r.moby_off[k] = len > 0.0f ? glm::dot(P - mp, row / len) : 0.0f;
+        }
+    }
+    return r;
+}
+
+namespace {
+// orig: (host) the lights per object class (g_class_lights) near the camera added to the frame's point lights after the ones placed
+// by hand: the tie instances of each class (mrp_world_tie_instances) and the live mobys of each (the list from *(0x15ffd8), 0x100
+// each, to the state 0xff), the offset turned with each; the nearest first, faded at the reach and at the first left out (no pop)
+void class_lights_add(double t) {
+    if (const char* e = std::getenv("RAC1_TIE_NEAR")) {  // (testing: the tie instances near a point, once: x,y,z,r)
+        static bool shown = false;
+        float x = 0, y = 0, z = 0, r = 6;
+        if (!shown && g_sh.frame > 60 && std::sscanf(e, "%f,%f,%f,%f", &x, &y, &z, &r) >= 3) {
+            shown = true;
+            for (const TieSpot& ti : mrp_world_tie_instances()) {
+                const float d = glm::length(glm::vec3(ti.pos[0], ti.pos[1], ti.pos[2]) - glm::vec3(x, y, z));
+                if (d <= r) {
+                    const glm::mat3 M(glm::vec3(ti.rows[0][0], ti.rows[0][1], ti.rows[0][2]), glm::vec3(ti.rows[1][0], ti.rows[1][1], ti.rows[1][2]),
+                                      glm::vec3(ti.rows[2][0], ti.rows[2][1], ti.rows[2][2]));
+                    const glm::vec3 l = std::fabs(glm::determinant(M)) > 1e-12f ? glm::inverse(M) * (glm::vec3(x, y, z) - glm::vec3(ti.pos[0], ti.pos[1], ti.pos[2])) : glm::vec3(0.0f);
+                    std::printf("[lights] %s class %d instance at %.2f %.2f %.2f (%.1f away); the point at %.2f %.2f %.2f, box %.2f %.2f %.2f .. %.2f %.2f %.2f, sphere %.1f %.1f %.1f r %.1f\n",
+                                ti.shrub ? "shrub" : "tie", ti.o_class, ti.pos[0], ti.pos[1], ti.pos[2], d, l.x, l.y, l.z, ti.lo[0], ti.lo[1], ti.lo[2], ti.hi[0], ti.hi[1], ti.hi[2],
+                                ti.sphere[0], ti.sphere[1], ti.sphere[2], ti.sphere[3]);
+                }
+            }
+            const uint32_t first = lwu(OV(0x0015ffd8u)), last = lwu(OV(0x0015ffdcu));
+            for (uint32_t m = first; m != 0 && m < 0x01fe0000u && (last == 0 || m <= last) && lbu(m + 0x20) != 0xff; m += 0x100) {
+                const glm::vec3 mp(lwc1(m + 0x10), lwc1(m + 0x14), lwc1(m + 0x18));
+                const float d = glm::length(mp - glm::vec3(x, y, z));
+                if (d <= r) std::printf("[lights] moby class %d (state %d) at %.2f %.2f %.2f (%.1f away)\n", lh(m + 0xa6), lbu(m + 0x20), mp.x, mp.y, mp.z, d);
+            }
+        }
+    }
+    if (const char* e = std::getenv("RAC1_PICK")) {  // (testing: the objects at a point, once: x,y,z)
+        static bool shown = false;
+        float q[3] = {};
+        if (!shown && g_sh.frame > 60 && std::sscanf(e, "%f,%f,%f", &q[0], &q[1], &q[2]) == 3) {
+            shown = true;
+            const LightPick pk = mrp_lighting_pick(q);
+            std::printf("[lights] pick %.2f %.2f %.2f: tie %d class %d offset %.3f %.3f %.3f; shrub %d class %d offset %.3f %.3f %.3f; moby %d class %d (%.2f away) offset %.3f %.3f %.3f\n",
+                        q[0], q[1], q[2], pk.tie ? 1 : 0, pk.tie_class, pk.tie_off[0], pk.tie_off[1], pk.tie_off[2], pk.shrub ? 1 : 0, pk.shrub_class, pk.shrub_off[0], pk.shrub_off[1],
+                        pk.shrub_off[2], pk.moby ? 1 : 0, pk.moby_class, pk.moby_dist, pk.moby_off[0], pk.moby_off[1], pk.moby_off[2]);
+        }
+    }
+    {  // the level's lights per class, once per level: how many instances each finds (a class with none: a wrong class or kind)
+        static int shown_level = -1;
+        const int level = static_cast<int>(lw(0x0015ed84));
+        if (level != shown_level && g_user_level == level && g_sh.frame > 30) {
+            shown_level = level;
+            for (const ClassLight& cl : g_class_lights) {
+                int n = 0;
+                if (cl.moby) {
+                    const uint32_t first = lwu(OV(0x0015ffd8u)), last = lwu(OV(0x0015ffdcu));
+                    for (uint32_t m = first; m != 0 && m < 0x01fe0000u && (last == 0 || m <= last) && lbu(m + 0x20) != 0xff; m += 0x100)
+                        n += static_cast<int8_t>(lbu(m + 0x20)) >= 0 && lh(m + 0xa6) == cl.o_class ? 1 : 0;
+                } else {
+                    for (const TieSpot& t : mrp_world_tie_instances()) n += t.shrub == cl.shrub && t.o_class == cl.o_class ? 1 : 0;
+                }
+                std::printf("[lights] level %d: emit %s %d: %d instances%s\n", level, cl.moby ? "moby" : cl.shrub ? "shrub" : "tie", cl.o_class, n,
+                            cl.moby ? " (live now)" : "");
+            }
+        }
+    }
+    if (g_class_lights.empty() || g_sh.npts >= kMaxPts) return;
+    struct Cand {
+        float d;
+        glm::vec3 p;
+        size_t cl;
+        uint32_t id;
+    };
+    static std::vector<Cand> cand;
+    cand.clear();
+    const float reach = g_sh.splits[1];
+    auto add = [&](size_t i, const glm::vec3& p, uint32_t id) {
+        const float d = glm::length(p - g_sh.cam) - g_class_lights[i].radius;
+        if (d < reach) cand.push_back({d, p, i, id});
+    };
+    bool any_moby = false;
+    for (size_t i = 0; i < g_class_lights.size(); ++i) {
+        const ClassLight& cl = g_class_lights[i];
+        if (!cl.on || !(cl.radius > 0.0f)) continue;
+        if (cl.moby) {
+            any_moby = true;
+            continue;
+        }
+        const std::vector<TieSpot>& ties = mrp_world_tie_instances();
+        for (size_t k = 0; k < ties.size(); ++k) {
+            const TieSpot& ti = ties[k];
+            if (ti.o_class != cl.o_class || ti.shrub != cl.shrub) continue;
+            glm::vec3 p(ti.pos[0], ti.pos[1], ti.pos[2]);
+            for (int r = 0; r < 3; ++r) p += glm::vec3(ti.rows[r][0], ti.rows[r][1], ti.rows[r][2]) * cl.off[r];
+            add(i, p, static_cast<uint32_t>(k));
+        }
+    }
+    if (any_moby) {
+        const uint32_t first = lwu(OV(0x0015ffd8u)), last = lwu(OV(0x0015ffdcu));
+        for (uint32_t m = first; m != 0 && m < 0x01fe0000u && (last == 0 || m <= last) && lbu(m + 0x20) != 0xff; m += 0x100) {
+            if (static_cast<int8_t>(lbu(m + 0x20)) < 0) continue;  // (a dead slot)
+            const int cls = lh(m + 0xa6);
+            for (size_t i = 0; i < g_class_lights.size(); ++i) {
+                const ClassLight& cl = g_class_lights[i];
+                if (!cl.on || !cl.moby || cl.o_class != cls) continue;
+                glm::vec3 p(lwc1(m + 0x10), lwc1(m + 0x14), lwc1(m + 0x18));
+                for (uint32_t r = 0; r < 3; ++r) {  // (the moby's rows, normalised: the offset in world units, turned with it)
+                    glm::vec3 row(lwc1(m + 0xc0 + 0x10 * r), lwc1(m + 0xc4 + 0x10 * r), lwc1(m + 0xc8 + 0x10 * r));
+                    const float len = glm::length(row);
+                    if (len > 0.0f) row /= len;
+                    p += row * cl.off[r];
+                }
+                add(i, p, m);
+            }
+        }
+    }
+    std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.d < b.d; });
+    const int budget = kMaxPts - g_sh.npts;
+    const int n = std::min(budget, static_cast<int>(cand.size()));
+    constexpr float kFade = 6.0f;
+    const float cut = static_cast<int>(cand.size()) > budget ? cand[static_cast<size_t>(budget)].d : reach;
+    for (int k = 0; k < n; ++k) {
+        const Cand& c = cand[static_cast<size_t>(k)];
+        const ClassLight& cl = g_class_lights[c.cl];
+        float f = cl.intensity * std::clamp((reach - c.d) / kFade, 0.0f, 1.0f) * std::clamp((cut - c.d) / kFade, 0.0f, 1.0f);
+        if (cl.flicker > 0.0f) {  // (as the lights placed by hand: per instance)
+            const double ph = static_cast<double>(c.id % 997) * 1.7;
+            const double w = 0.5 * std::sin(t * 7.3 + ph) + 0.3 * std::sin(t * 13.1 + ph * 2.0) + 0.2 * std::sin(t * 29.7 + ph * 3.0);
+            f *= 1.0f - cl.flicker * 0.35f * static_cast<float>(1.0 + w);
+        }
+        if (static_cast<int>(c.cl) == g_class_light_selected) f *= 0.6f + 0.4f * static_cast<float>(std::sin(t * 8.0));  // (the debug menu's: pulsing)
+        g_sh.pt_pos[g_sh.npts] = glm::vec4(c.p, cl.radius);
+        g_sh.pt_col[g_sh.npts] = glm::vec4(cl.col[0] * f, cl.col[1] * f, cl.col[2] * f, -1.0f);
+        g_sh.pt_slot[g_sh.npts] = cl.moby ? -2 : -1;  // (a moby's lamp: no shadow cube - its own mesh around the light would hide it)
+        ++g_sh.npts;
+    }
+    if (std::getenv("RAC1_LIGHTS_TRACE") != nullptr) {
+        static uint64_t calls = 0;
+        if (calls++ % 60 == 0) std::printf("[lights] per class: %zu near, %d taken\n", cand.size(), n);
+    }
+}
+}  // namespace
 
 // orig: (host) see mrp_lighting.h
 void mrp_lighting_shadow_pass() {
@@ -1499,6 +2387,7 @@ void mrp_lighting_shadow_pass() {
             g_sh.pt_slot[g_sh.npts] = -1;
             ++g_sh.npts;
         }
+        class_lights_add(t);
     }
     if (g_modern_points != 0 && g_auto_lights != 0) {  // the automatic emitters near the camera, the nearest first
         float pr[4 * kMaxPts], pc[4 * kMaxPts];
@@ -1776,20 +2665,6 @@ void mrp_lighting_shadow_pass() {
     point_tiles_update();
     glActiveTexture(GL_TEXTURE0 + kTileUnit);
     glBindTexture(GL_TEXTURE_2D, g_sh.tiles);
-    {  // the cascades' maps again, read as depths (a sampler without the compare)
-        static GLuint smp = 0;
-        if (smp == 0) {
-            glGenSamplers(1, &smp);
-            glSamplerParameteri(smp, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glSamplerParameteri(smp, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glSamplerParameteri(smp, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glSamplerParameteri(smp, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glSamplerParameteri(smp, GL_TEXTURE_COMPARE_MODE, GL_NONE);
-        }
-        glActiveTexture(GL_TEXTURE0 + kDepthUnit);
-        glBindTexture(GL_TEXTURE_2D_ARRAY, g_sh.tex);
-        glBindSampler(kDepthUnit, smp);
-    }
     glActiveTexture(GL_TEXTURE0);
     g_sh.on = true;
 }
@@ -1811,10 +2686,10 @@ ShadowLocs mrp_lighting_locs(unsigned prog) {
     l.param = glGetUniformLocation(p, "uShParam");
     l.texel = glGetUniformLocation(p, "uShTexel");
     l.part = glGetUniformLocation(p, "uShPart");
-    l.depth = glGetUniformLocation(p, "uShDepth");
-    l.range = glGetUniformLocation(p, "uShRange");
-    l.fade = glGetUniformLocation(p, "uShFade");
     l.sun_k = glGetUniformLocation(p, "uShSunK");
+    l.key = glGetUniformLocation(p, "uShKey");
+    l.key_dir = glGetUniformLocation(p, "uShKeyDir");
+    l.strength = glGetUniformLocation(p, "uShStrength");
     l.debug = glGetUniformLocation(p, "uShDebug");
     l.pt_n = glGetUniformLocation(p, "uPtN");
     l.pt_pos = glGetUniformLocation(p, "uPtPos");
@@ -1839,7 +2714,6 @@ void bind_common(const ShadowLocs& l) {
 // runs in, draws the sky alone (an empty world): its sky was never drawn
 void bind_units(const ShadowLocs& l) {
     glUniform1i(l.map, kUnit);
-    glUniform1i(l.depth, kDepthUnit);
     glUniform1i(l.pt_map, kPtUnit);
     glUniform1i(l.pt_tiles, kTileUnit);
 }
@@ -1858,15 +2732,20 @@ void mrp_lighting_bind_receiver(const ShadowLocs& l, bool sky) {
     glUniformMatrix4fv(l.casc, kCascades, GL_FALSE, glm::value_ptr(m[0]));
     glUniform3f(l.cam, g_sh.cam.x, g_sh.cam.y, g_sh.cam.z);
     glUniform3f(l.sun, g_sh.sun.x, g_sh.sun.y, g_sh.sun.z);
-    glUniform4f(l.param, static_cast<float>(g_shadow_strength) / 100.0f, g_has_sun.load() ? static_cast<float>(kCascades) : 0.0f, 0.08f, 1.0f);
+    // (x: the share fallback's strength - the lighting's variants apply the strength to the visibility, uShStrength)
+    glUniform4f(l.param, l.strength >= 0 ? 1.0f : static_cast<float>(g_shadow_strength) / 100.0f, g_has_sun.load() ? static_cast<float>(kCascades) : 0.0f, 0.08f, 1.0f);
     glUniform3f(l.texel, g_sh.casc[0].texel, g_sh.casc[1].texel, g_sh.casc[2].texel);
     glUniform3f(l.part, g_sh.casc[0].part, g_sh.casc[1].part, g_sh.casc[2].part);
-    if (l.depth >= 0) {  // (only the lighting's variants have them)
-        static const float fd[3] = {static_cast<float>(env_int("RAC1_SHADOW_FADE_FROM", 25)), static_cast<float>(env_int("RAC1_SHADOW_FADE_TO", 120)),
-                                    static_cast<float>(env_int("RAC1_SHADOW_FADE_KEEP", 35)) / 100.0f};  // (testing: units, units, percent)
-        glUniform3f(l.range, g_sh.casc[0].range, g_sh.casc[1].range, g_sh.casc[2].range);
-        glUniform4f(l.fade, fd[0], fd[1], fd[2], g_shadow_fade != 0 ? 1.0f : 0.0f);
+    if (l.sun_k >= 0) {  // (only the lighting's variants have them)
         glUniform1f(l.sun_k, g_sh.sun_k);
+        glUniform1f(l.strength, static_cast<float>(g_shadow_strength) / 100.0f);
+        glUniform3f(l.key_dir, g_sh.key_dir.x, g_sh.key_dir.y, g_sh.key_dir.z);
+        if (l.key >= 0) {  // (RAC1_WORLD_SHADOW=share, testing / no key light known: the old estimate, the strength's share of the colour)
+            static const bool share = std::getenv("RAC1_WORLD_SHADOW") != nullptr && std::strcmp(std::getenv("RAC1_WORLD_SHADOW"), "share") == 0;
+            const glm::vec4& k = g_sh.key;
+            if (share || !(k.x + k.y + k.z > 0.0f)) glUniform4f(l.key, 0.0f, 0.0f, 0.0f, -1.0f);
+            else glUniform4f(l.key, k.x * (128.0f / 255.0f), k.y * (128.0f / 255.0f), k.z * (128.0f / 255.0f), k.w);
+        }
     }
     glUniform1i(l.debug, g_shadow_debug);
     glUniform1i(l.pt_n, g_modern_points != 0 ? g_sh.npts : -1);

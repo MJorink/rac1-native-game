@@ -22,6 +22,17 @@ The three pages are added to Options in both the pause menu and the main menu, b
 They are built from the game's own menu widgets and data (a copy of the Camera page), so they look
 and behave like the game's own pages. Left and right change a row's value; Cross steps it forward.
 
+### Sound: 5.1 and 7.1
+
+The game's own Sound page (Options > Sound) is kept as it is; its last row, the game's Mono / Stereo switch, also
+offers **5.1** and **7.1**: Cross steps Mono, Stereo, 5.1, 7.1, then Mono again. 5.1 and 7.1 are settings of this PC
+version: the game's own byte stays at Stereo (it is in the game's save and its code reads it), so the game plays
+exactly as in Stereo, and the choice is kept in the preferences (`audio_channels 6` or `8` in
+`advanced_options.txt`), not in the saves. The text shown is "5.1" / "7.1" in every language. The sound device is
+opened again with 6 or 8 channels (7.1 at most, PCM); the world's sounds come from their direction, the dialogue from
+the centre, the music from the front (see [Audio](audio.md#surround-51-and-71)). With every enhancement off (the
+headless runs) the row is the game's own Mono / Stereo.
+
 ### Graphics
 
 `src/game/enhance/graphics.cpp`. Every row changes only what the host draws, never the game's state.
@@ -36,10 +47,11 @@ and behave like the game's own pages. Left and right change a row's value; Cross
 | Render Resolution | x0.50 to x2.00 of the window's, in steps of 0.25 | x1.00 |
 | Aspect Ratio | 4:3 Original, 16:9, Fill Screen | 4:3 Original |
 | Fit to Screen | Black Bars, Stretch | Black Bars |
-| Overscan | TV, Full Frame | TV |
 | Field of View | x0.75 to x1.50 of the original's | x1.00 |
 | Level of Detail | Original, Low, Medium, High, Maximum | Original |
 | Lighting | Original, Low, Medium, High | Original |
+| Shadow Strength | 50, 60, 70, 80, 90, 100 (%) | 70 |
+| Sun Rays | Off, Low, High | Off |
 | Shadow Distance | Low, Medium, High, Maximum | Maximum |
 | Dynamic Shadows | Off, On | Off |
 | Secondary Lights | Off, Game's, All | All |
@@ -56,10 +68,12 @@ and behave like the game's own pages. Left and right change a row's value; Cross
 - **Aspect Ratio** Fill Screen widens the 3D to the window's shape without changing what the game
   sees; **Fit to Screen** applies when the chosen shape is not the window's. See
   [Rendering](rendering.md#widescreen-and-render-scale).
-- **Overscan** TV hides a thin strip (4 of the game's 512 x 416 frame pixels) at the left, right and
-  top edges, the part of the picture a TV of the time did not show; the game parks some 2D there that
-  was never meant to be seen. The crop applies to the 2D layer only (HUD, menus, texts), never to the
-  3D. Full Frame shows everything the PS2 drew. Headless runs always keep the full frame.
+- **The full frame** is always shown, everything the PS2 drew, edges included. Until 0.4 an Overscan
+  row (TV, the default, or Full Frame) could hide a thin strip at the left, right and top edges, as a
+  TV of the time did; the row was removed. The one thing the game itself draws there that a TV hid, a
+  thin strip of a HUD element as it slides away (the Suck Cannon's gauge, the air meter), is not drawn
+  (see [Rendering](rendering.md)). The `overscan` key of older preferences and the Overscan item of
+  older saves are read and ignored.
 - **Level of Detail** draws more detail further away, without changing the game's own decisions. See
   [Rendering](rendering.md#level-of-detail).
 - **Lighting and the four rows after it** are the optional modern lighting; the last four only act
@@ -154,7 +168,7 @@ To try the panel without a new release: `RAC1_UPDATE_FAKE=0.9.0` (or `dev:12`) w
 | What | Where |
 |---|---|
 | Graphics page | `~/.config/rac1-native/graphics_options.txt` |
-| Advanced page (and the update check's Skip Version) | `~/.config/rac1-native/advanced_options.txt` |
+| Advanced page (and the update check's Skip Version, the Sound page's 5.1 / 7.1) | `~/.config/rac1-native/advanced_options.txt` |
 | The update check's last answer | `~/.config/rac1-native/update_check.txt` |
 | Controls | `~/.config/rac1-native/controls.txt` (see [Input](input.md#the-bindings-file-controlstxt)) |
 | The picture settings, the Advanced settings and the mode, per save | `save<N>.pc` next to each save (see [Saves](saves.md#the-pc-settings-next-to-each-save)) |
@@ -167,7 +181,7 @@ to other files.
 
 The window's own settings (display mode, window size, v-sync, frame-rate cap) belong to the machine
 and are kept only in the preferences. The picture settings (render resolution, aspect ratio, fit,
-field of view, level of detail, the lighting rows, texture detail, overscan) and the Advanced settings are also written into
+field of view, level of detail, the lighting rows, texture detail) and the Advanced settings are also written into
 each save's `save<N>.pc`, so loading a save brings back the settings it was played with. A save
 without that file (an older one) keeps the current settings.
 
