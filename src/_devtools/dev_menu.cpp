@@ -4,6 +4,7 @@
 
 #include "dev_menu.h"
 #include "item_give_quiet.h"
+#include "dev_profiler.h"
 
 #include <game/ovl/ovl_reloc.h>
 #include <game/debug_hooks.h>
@@ -1383,7 +1384,7 @@ void dev_menu_draw(double update_ms, double frame_ms) {
         float unused[3];
         mrp_lighting_screen_point(-1.0f, -1.0f, unused);
     }
-    if (!g_menu || (!g_settings.open && !g_settings.show_stats)) return;
+    if (!g_menu || (!g_settings.open && !g_settings.show_stats && !profiler_overlay_wanted())) return;
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
@@ -1397,6 +1398,7 @@ void dev_menu_draw(double update_ms, double frame_ms) {
         ImGui::Text("nanotech %d/%d  bolts %d  sounds %d", r32(HEALTH), r32(HEALTH_MAX), r32(BOLTS), snd989_iop_active_sounds());
         ImGui::End();
     }
+    profiler_overlay();
     if (g_settings.open) {
         ImGui::SetNextWindowSize(ImVec2(720, 600), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowPos(ImVec2(40, 110), ImGuiCond_FirstUseEver);
@@ -1420,6 +1422,7 @@ void dev_menu_draw(double update_ms, double frame_ms) {
                 if (tab("Audio")) { tab_audio(); ImGui::EndTabItem(); }
                 if (tab("Levels")) { tab_levels(); ImGui::EndTabItem(); }
                 if (tab("Engine")) { tab_engine(); ImGui::EndTabItem(); }
+                if (tab("Profiler")) { tab_profiler(); ImGui::EndTabItem(); }
                 ImGui::EndTabBar();
             }
         }

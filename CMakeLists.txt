@@ -50,7 +50,7 @@ include(cmake/dependencies.cmake)
 # ---- src/platform/ : the operating system's calls, behind one interface (Linux: POSIX; Windows: Win32) ----
 if(WIN32)
     add_library(rac1_platform STATIC src/platform/platform_win32.cpp)
-    target_link_libraries(rac1_platform PUBLIC winmm)  # (timeBeginPeriod: the system timer's period)
+    target_link_libraries(rac1_platform PUBLIC winmm psapi)  # (timeBeginPeriod: the system timer's period; GetProcessMemoryInfo)
 else()
     add_library(rac1_platform STATIC src/platform/platform_posix.cpp)
 endif()
@@ -86,6 +86,11 @@ target_link_libraries(rac1_formats PUBLIC rac1_io)
 target_include_directories(rac1_formats PUBLIC src)
 target_link_libraries(rac1_formats PUBLIC tinygltf_headers)
 
+# ---- src/profiler/ : the host's frame profiler (the debug menu's Profiler tab, RAC1_PROFILER_*; openly invented tooling) ----
+add_library(rac1_profiler STATIC src/profiler/host_profiler.cpp)
+target_include_directories(rac1_profiler PUBLIC src)
+target_link_libraries(rac1_profiler PUBLIC rac1_platform glad glfw)
+
 # ---- runtime/ : the PS2 hardware layer only (EE / VU / GS / SIF / IOP / SPU2), no game logic ----
 add_library(rac1_runtime STATIC
     runtime/kernel/ee_memory.cpp
@@ -116,7 +121,7 @@ add_library(rac1_runtime STATIC
     runtime/level/level_loader.cpp
 )
 target_include_directories(rac1_runtime PUBLIC ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(rac1_runtime PUBLIC rac1_platform rac1_formats glad glfw glm_headers OpenGL::GL imgui opengoal_989snd)
+target_link_libraries(rac1_runtime PUBLIC rac1_platform rac1_profiler rac1_formats glad glfw glm_headers OpenGL::GL imgui opengoal_989snd)
 
 # The movies' MPEG-2 pictures (runtime/ipu/movie_hw.cpp, the IPU's stand-in): FFmpeg's libavcodec
 # when pkg-config finds it (optional). Without it the game runs and its movies are skipped (logged).

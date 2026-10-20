@@ -1,12 +1,12 @@
 # Environment variables
 
-rac1-native reads a number of `RAC1_*` environment variables. This page lists all of them: 297 in
+rac1-native reads a number of `RAC1_*` environment variables. This page lists all of them: 301 in
 total, in three groups.
 
 | Group | Count | Who it is for |
 |---|---|---|
 | [Player](#player-variables) | 18 | Settings a player may want to change: files, window, audio, the ISO |
-| [Debugging](#debugging-variables) | 220 | Developers: profilers, overlays, switching a renderer or an optimisation on or off to compare |
+| [Debugging](#debugging-variables) | 224 | Developers: profilers, overlays, switching a renderer or an optimisation on or off to compare |
 | [Automated testing](#automated-testing-variables) | 59 | Scripted and headless runs: frame counts, screenshots, simulated input, self-checks |
 
 The oracle (`build/tests/ovl_oracle`) reads variables of its own (`ORACLE_*`, `RAC1_ORACLE_DUMPS`): see
@@ -82,7 +82,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_EMIT_MAX_SHARE` | fraction 0 to 1; default 0.35 | The modern lighting's automatic emitters: a warm-coloured class glowing over more than this share of its surface is taken as a bright material, not a lamp. |
 | `RAC1_FADE_LOG` | set (any value) = on; default off | Prints the frames of the game's blocking loops (fades and waits) as they run. |
 | `RAC1_FPU_NEAREST` | 1 = host round-to-nearest; default off (round toward zero as the PS2) | Turns off the PS2-style float rounding so the host's normal rounding is used, only to compare behaviour. |
-| `RAC1_FRAME_PROF` | 1 or 2; default off | Turns on the per-stage frame profiler: 1 = CPU time per stage with a GPU wait, 2 = CPU time without waits plus GPU time per stage from timer queries and frame-period statistics. |
+| `RAC1_FRAME_PROF` | 1 or 2; default off | Turns on the per-stage frame profiler: 1 = CPU time per stage with a GPU wait, 2 = CPU time without waits plus GPU time per stage from timer queries and frame-period statistics. The finer, newer one is the debug menu's Profiler tab (`RAC1_PROFILER_DUMP` headless). |
 | `RAC1_FRAME_PROF_LONG` | milliseconds (float); default 30 | With RAC1_FRAME_PROF, prints a stage-by-stage breakdown for each host frame longer than this. |
 | `RAC1_GS_AFAIL_SPLIT` | 0 = off; default on | Setting 0 turns off the two-pass handling of alpha-test-failing geometry that writes depth, going back to the old behaviour, to compare moby rendering. |
 | `RAC1_GS_DUMP` | file path prefix; unset = off | With RAC1_GS_TRACE, writes the textures of the first 12 primitives of each traced chain as PPM images named <prefix>_NN.ppm. |
@@ -190,6 +190,10 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_POINT_SHADOWS` | 0 = off, 1 = on; default 0 | Forces shadows from the dynamic point lights on or off, overriding the Options setting. |
 | `RAC1_POINT_TILES` | 0 = every light is applied everywhere; default per-tile light assignment | Switches off the per-tile selection of point lights, for comparing speed and look. |
 | `RAC1_POINT_TRACE` | any value = on; default off | Every 20 frames prints the game's 8 dynamic point lights. |
+| `RAC1_PROFILER_CSV` | output file path; unset = off | Turns the host's frame profiler on (the debug menu's Profiler tab, see [the dev tools](../src/_devtools/README.md#the-profiler)) and writes one CSV row per host frame: its period, the game frames it ran, the main thread's CPU time, each stage's CPU and GPU milliseconds, the GPU's busy time and span, the workers' busy and CPU time. Rows come a few frames late (the GPU's timestamps are read back without waiting). |
+| `RAC1_PROFILER_DUMP` | integer N frames (any non-positive value = 120); unset = off | Turns the host's frame profiler on and prints a `[profiler]` summary of the last N host frames every N frames: fps, frame time min / avg / max / p99 / 1 % low, the main thread's work (game code and host) and waits, the GPU's busy time, the bottleneck, each stage's CPU and GPU time, the workers, every thread's CPU %, the process's memory, the GPU's memory (Linux DRM fdinfo, GL_NVX_gpu_memory_info / GL_ATI_meminfo) and the GL objects per owner. Works headless; what the Profiler tab shows, in the log. |
+| `RAC1_PROFILER_OVERLAY` | 1 = on; default off | With the debug tools (or RAC1_DEVMENU_SHOT), the debug menu's profiler overlay is on from the start (fps, CPU / GPU, the bottleneck, a small graph and the stages' bars), as its Overlay box does. |
+| `RAC1_PROFILER_TRACE` | `file[,from[,frames]]`, from a host frame number (default 120), frames (default 300); unset = off | Records a Chrome trace (chrome://tracing, ui.perfetto.dev) of that many host frames: the main thread's stages, the GPU's (its timestamps on the CPU's time line), the GS chain and MRP scene workers' jobs, the host frames; written when done (and at exit). |
 | `RAC1_RENDER_SCALE` | integer percent; unset = the Options setting | Overrides the 3D render scale, as a percentage of the window. |
 | `RAC1_RENDER_SHADE` | integer; 1 = vertex colours alone; default 0 | Debug view that shades with the vertex colours alone. |
 | `RAC1_SAMPLE_FROM` | frame number; default 0 (sample from the start) | Used with RAC1_SAMPLE_PROF: sampling starts at this frame. |

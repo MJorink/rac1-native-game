@@ -34,3 +34,53 @@ support development:
 - **Sun** (tab), interiors: the level's `interior` boxes (the camera inside: the sun off, the original's look) drawn over the
   picture, added around the camera, edited, deleted; `interior_set` light sets (the hero lit with one); saved with the level file
   (see [Lighting: interiors](../../docs/lighting.md#interiors)).
+
+## The profiler
+
+The **Profiler** tab (`dev_profiler.cpp`; the measuring is `src/profiler/host_profiler.{h,cpp}`, which the renderers and
+the workers call) shows where a host frame's time goes. It records only while the tab is shown or its **Overlay** is
+on: closed, every zone is one relaxed atomic load and no GL query is made; open, a run at Daino's 5053x1371 took 2-3 %
+longer (the dumps' GL object counts included). `RAC1_PROFILER_DUMP`, `RAC1_PROFILER_CSV` and
+`RAC1_PROFILER_TRACE` ([env-vars](../../docs/env-vars.md)) record without the menu, also headless (and
+`RAC1_DEVMENU_SHOT=Profiler RAC1_PROFILER_OVERLAY=1` shows the tab and the overlay in a headless screenshot).
+
+- **Frame time**: fps, the frame's period (min / avg / max / p99, 1 % lows) over the last N frames (the slider), a graph
+  of the period (white), the main thread's own work (blue: the period minus its waits) and the GPU's busy time
+  (orange), with the game's code (the EE update) against the host's own work.
+- **Stages**, CPU and GPU side by side: a stacked bar each and a sortable table (the busiest stage on each side in
+  yellow, the waits greyed). Each stage's time is its *self* time: a zone inside another (the GS 2D inside the
+  effects) counts in its own stage only, so the stages add up to the frame. The CPU side is the main thread's wall
+  time. The GPU side: one `glQueryCounter(GL_TIMESTAMP)` at each boundary of a GPU-timed zone, the time between two
+  given to the innermost zone open there; read back up to 32 frames later and only when ready (never a stall: a
+  frame whose results did not come is left out of the GPU's averages; in uncapped headless runs they came back 4 to 17
+  frames later). No flush between them (a flush per boundary made a run 50 % slower), so a stage's GPU
+  time also holds the GPU's idle wait for the CPU to submit its commands: exact when the GPU is the bottleneck (its
+  queue never empty), too high when the CPU is. The kernel's own account of the GPU's time (Linux DRM
+  `drm-engine-gfx`) is shown beside it as the check, and decides "GPU-bound" where it exists.
+  The stages: events and input, the game frames (the game's code on the EE coroutine, the audio step), the prepare
+  (the GS chain's capture and the scene's start, the wait for the scene's capture, the moby lists), the draw (the
+  wait for the MRP scene worker, the sun cascades, the point cubes, the world, the mobys, the wait for the GS chain
+  worker, the ambient occlusion, the sun rays, the render scale's resolve, the effects, the GS replica's 2D / HUD,
+  the frame captures, the debug menu itself), the profiler's own readback and sampling (with Mesa's GL thread a
+  query's result is a sync: the driver's back-pressure can show there), the frame cap's wait and the present (the
+  swap: the v-sync, or the driver's queue full when the GPU is behind).
+- **Bottleneck**: GPU-bound (the GPU busy for 85 % of the frame or more), bound by a worker (the main thread waits
+  15 % of the frame or more for the MRP scene build or the GS chain), CPU-bound on the main thread (its own work 85 %
+  of the frame or more), or held by the frame cap / v-sync.
+- **Threads**: the GS chain worker's and the MRP scene worker's busy and CPU time per frame (their jobs timed), and
+  every thread of the process with its CPU % (Linux: `/proc/self/task/*/schedstat`; Windows: the threads' times;
+  the driver's threads included), and the process's CPU %.
+- **Memory**: the process's resident memory and its peak (Linux `/proc/self/status`; Windows
+  `GetProcessMemoryInfo`), the GPU's: the kernel's account of this process's VRAM and GTT and the device's totals
+  (Linux DRM `/proc/self/fdinfo`, amdgpu's sysfs; the GPU's busy % from `drm-engine-gfx`), `GL_NVX_gpu_memory_info` /
+  `GL_ATI_meminfo` where the driver has them, and **Count GL objects**: every texture, buffer and renderbuffer the
+  context holds, sized from GL itself, per owner (the renderers tag their allocations with `prof::gl_track_n`; the
+  rest is "(untracked)").
+- **Export CSV** (the last N frames) and **Chrome trace** (the next 300 frames, for chrome://tracing or
+  ui.perfetto.dev: the main thread's zones, the GPU's on the CPU's time line, the workers' jobs), written in the
+  working directory as `rac1_profile_<date>_<time>.csv / .json`.
+
+A new stage is a `prof::Stage` (its name, colour, whether it is a wait and whether it is timed on the GPU) and a
+`RAC1_PROF_ZONE(kStage)` (or `prof::begin` / `prof::end`) around the code, on the main thread; a worker's job is a
+`prof::Job`. The old `RAC1_FRAME_PROF` (coarser, printed) and the per-pass `RAC1_AO_PROF` / `RAC1_SHADOW_PROF` /
+`RAC1_SUN_RAYS_TRACE` timers are left as they were.

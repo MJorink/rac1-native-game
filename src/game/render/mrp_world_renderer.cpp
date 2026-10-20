@@ -17,6 +17,7 @@
 #include <game/render/mrp_world_static.h>
 #include <game/render/render_toggles.h>
 #include <game/render/render_view.h>
+#include <profiler/host_profiler.h>
 #include <runtime/gs/gs_draw.h>
 #include <runtime/gs/gs_emu.h>
 #include <runtime/kernel/ee_memory.h>
@@ -308,6 +309,7 @@ void load_textures(Level& L) {
         while ((b.w >> maxl) > 0 && (b.h >> maxl) > 0 && maxl < b.levels) ++maxl;
         b.levels = std::max(1u, std::min(b.levels, maxl));
         glGenTextures(1, &b.tex);
+        rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &b.tex, "MRP world: texture arrays");
         glBindTexture(GL_TEXTURE_2D_ARRAY, b.tex);
         const GLsizei layers = static_cast<GLsizei>(b.textures.size());
         for (uint32_t l = 0; l < b.levels; ++l)
@@ -445,7 +447,9 @@ void load_level(int id) {
     load_textures(L);
     glGenVertexArrays(1, &L.vao);
     glGenBuffers(1, &L.vbo);
+    rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 1, &L.vbo, "MRP world: meshes");
     glGenBuffers(1, &L.ibo);
+    rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 1, &L.ibo, "MRP world: meshes");
     glBindVertexArray(L.vao);
     glBindBuffer(GL_ARRAY_BUFFER, L.vbo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, L.ibo);
@@ -463,7 +467,9 @@ void load_level(int id) {
     build_templates(L);
     glGenVertexArrays(1, &L.tvao);
     glGenBuffers(1, &L.tvbo);
+    rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 1, &L.tvbo, "MRP world: meshes");
     glGenBuffers(1, &L.tibo);
+    rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 1, &L.tibo, "MRP world: meshes");
     glBindVertexArray(L.tvao);
     glBindBuffer(GL_ARRAY_BUFFER, L.tvbo);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(L.tverts.size() * sizeof(TVert)), L.tverts.data(), GL_STATIC_DRAW);
@@ -853,7 +859,9 @@ bool init_gl() {
         g_prog_e = g_prog_gpu_e = 0;
     }
     glGenBuffers(3, g_ssbo);
+    rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 3, g_ssbo, "MRP world: frame buffers");
     glGenBuffers(1, &g_indirect);
+    rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 1, &g_indirect, "MRP world: frame buffers");
     constexpr GLenum kGlMaxAnisotropy = 0x84FE;
     float aniso = 1.0f;
     glGetFloatv(kGlMaxAnisotropy, &aniso);
@@ -951,6 +959,7 @@ const TexRef* sky_texture(Level& L, const SceneFrame& S, uint64_t tex0) {
     b.h = h;
     b.levels = 1;
     glGenTextures(1, &b.tex);
+    rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &b.tex, "MRP world: texture arrays");
     glBindTexture(GL_TEXTURE_2D_ARRAY, b.tex);
     glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, static_cast<GLsizei>(w), static_cast<GLsizei>(h), 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BASE_LEVEL, 0);
@@ -997,6 +1006,7 @@ const TexRef* vram_texture(Level& L, uint64_t tex0, uint64_t tex1, uint64_t mip1
     b.h = h;
     b.levels = levels;
     glGenTextures(1, &b.tex);
+    rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &b.tex, "MRP world: texture arrays");
     glBindTexture(GL_TEXTURE_2D_ARRAY, b.tex);
     for (uint32_t l = 0; l < levels; ++l) {
         const uint32_t tbp = l == 0 ? fld(tex0, 0, 14) : fld(mip1, 20 * (l - 1), 14);
@@ -1741,6 +1751,7 @@ void set_frame_uniforms(const Loc& l, const gs::Viewport* vp, int mode) {
 void upload_resident_colours() {
     ResidentColours& rc = g_rcols;
     if (g_rcol_buf == 0) glGenBuffers(1, &g_rcol_buf);
+    rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 1, &g_rcol_buf, "MRP world: frame buffers");
     glBindBuffer(kGlShaderStorageBuffer, g_rcol_buf);
     const size_t bytes = std::max<size_t>(rc.mirror.size() * 4, 16);
     if (rc.all_dirty || bytes != g_rcol_size) {
@@ -2596,6 +2607,7 @@ struct SceneWorker {
             if (quit) return;
             lk.unlock();
             const double t0 = now_ms();
+            const rac1::prof::Job prof_job(rac1::prof::kWorkerScene);  // (the debug menu's profiler: the job's time)
             try {
                 if (capture) {
                     // (the game's point lights per pixel instead; never before the level's colours were taken once)
@@ -2631,7 +2643,10 @@ struct SceneWorker {
     void start(uint32_t cs, uint32_t ce, bool rs, bool ks, bool cap = false, const SceneAddrs& ad = {}, const ColourSource& col = {}) {
         {
             std::lock_guard<std::mutex> lk(m);
-            if (!th.joinable()) th = std::thread([this] { run(); });
+            if (!th.joinable()) th = std::thread([this] {
+                rac1::prof::thread_name("MRP scene worker");
+                run();
+            });
             colours = col;
             capture = cap;
             captured = !cap;
@@ -2750,6 +2765,7 @@ bool mrp_world_pending() { return g_frame.pending; }
 
 // orig: (host) see mrp_world_renderer.h
 void mrp_world_wait_captured() {
+    RAC1_PROF_ZONE(kSceneCaptureWait);
     if (g_frame.pending && scene_threaded()) g_worker.wait_captured();
 }
 
@@ -2775,7 +2791,9 @@ void mrp_world_finish_frame() {
     if (!F.pending) return;
     F.pending = false;
     F.uploaded = false;
+    const int prof_wait = rac1::prof::begin(rac1::prof::kSceneWait);
     const bool built = scene_threaded() ? g_worker.wait() : g_worker.built;
+    rac1::prof::end(prof_wait);
     const double t1 = now_ms();
     if (!built) {
         F.skips.clear();
@@ -3073,7 +3091,9 @@ void mrp_world_after_chain(int win_w, int win_h, const gs::Viewport* vp, const g
             if (fbo[i] == 0) {
                 glGenFramebuffers(1, &fbo[i]);
                 glGenTextures(1, &tex[i]);
+                rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &tex[i], "MRP world: check targets (testing)");
                 glGenRenderbuffers(1, &rbo[i]);
+                rac1::prof::gl_track_n(rac1::prof::kGlRenderbuffer, 1, &rbo[i], "MRP world: check targets (testing)");
             }
             glBindTexture(GL_TEXTURE_2D, tex[i]);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, vw, vh, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);

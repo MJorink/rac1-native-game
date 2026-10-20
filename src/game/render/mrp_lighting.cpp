@@ -7,6 +7,7 @@
 #include <game/render/mrp_moby_renderer.h>
 #include <game/render/mrp_world_renderer.h>
 #include <game/render/render_view.h>
+#include <profiler/host_profiler.h>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -396,6 +397,7 @@ bool ensure_resources() {
     if (g_sh.fbo == 0) {
         glGenFramebuffers(1, &g_sh.fbo);
         glGenTextures(1, &g_sh.tex);
+        rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &g_sh.tex, "Shadows: sun cascades");
     }
     glBindTexture(GL_TEXTURE_2D_ARRAY, g_sh.tex);
     glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT32F, want, want, kCascades, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
@@ -641,6 +643,7 @@ void point_tiles_update() {
     }
     if (g_sh.tiles == 0) {
         glGenTextures(1, &g_sh.tiles);
+        rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &g_sh.tiles, "Point lights: tiles");
         glBindTexture(GL_TEXTURE_2D, g_sh.tiles);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32UI, kTilesX, kTilesY, 0, GL_RGBA_INTEGER, GL_UNSIGNED_INT, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -660,6 +663,7 @@ void point_shadows_pass() {
     if (g_point_shadows == 0 || g_modern_points == 0 || g_sh.npts == 0) return;
     if (g_sh.ptex == 0) {
         glGenTextures(1, &g_sh.ptex);
+        rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &g_sh.ptex, "Shadows: point cubes");
         glBindTexture(kGlCubeMapArray, g_sh.ptex);
         glTexImage3D(kGlCubeMapArray, 0, GL_DEPTH_COMPONENT32F, kPtRes, kPtRes, 6 * kPtShadows, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
         glTexParameteri(kGlCubeMapArray, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -1191,6 +1195,7 @@ void sun_rays_pass(GLint fb, const int vp[4]) {
         GLuint f[4], t[4];
         glGenFramebuffers(4, f);
         glGenTextures(4, t);
+        rac1::prof::gl_track_n(rac1::prof::kGlTexture, 4, t, "Sun rays");
         R.dfbo = f[0], R.cfbo = f[1], R.mfbo = f[2], R.rfbo = f[3];
         R.dtex = t[0], R.ctex = t[1], R.mtex = t[2], R.rtex = t[3];
     }
@@ -1388,8 +1393,11 @@ void cover_probe(GLint fb, const int vp[4]) {
         glGenFramebuffers(1, &P.dfbo);
         glGenFramebuffers(1, &P.ofbo);
         glGenTextures(1, &P.dtex);
+        rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &P.dtex, "Sun cover probe");
         glGenTextures(1, &P.otex);
+        rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &P.otex, "Sun cover probe");
         glGenBuffers(2, P.pbo);
+        rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 2, P.pbo, "Sun cover probe");
         for (int i = 0; i < 2; ++i) {
             glBindBuffer(GL_PIXEL_PACK_BUFFER, P.pbo[i]);
             glBufferData(GL_PIXEL_PACK_BUFFER, 4 * kProbeW * kProbeH, nullptr, GL_STREAM_READ);
@@ -1553,6 +1561,7 @@ void mrp_lighting_ao_pass() {
     if (!mrp_world_last_viewport(vp)) return;
     screen_point_read(vp);
     lamp_scan(vp);
+    const int prof_ao = rac1::prof::begin(rac1::prof::kAo);  // (the debug menu's profiler: the cover probe and the occlusion)
     GLint fb = 0, rfb = 0, prev_prog = 0, prev_vao = 0, prev_vp[4] = {}, prev_active = 0, prev_t0 = 0, prev_t1 = 0, prev_rb = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &fb);
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
@@ -1619,7 +1628,9 @@ void mrp_lighting_ao_pass() {
             glGenFramebuffers(1, &A.afbo);
             glGenFramebuffers(1, &A.bfbo);
             glGenTextures(1, &A.atex);
+            rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &A.atex, "Ambient occlusion");
             glGenTextures(1, &A.btex);
+            rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &A.btex, "Ambient occlusion");
         }
         GLenum fmt = A.dfmt;
         if (fb != A.last_fb || fmt == 0) {
@@ -1651,6 +1662,7 @@ void mrp_lighting_ao_pass() {
             if (A.dtex != 0) glDeleteTextures(1, &A.dtex);
             A.stex = 0;
             glGenTextures(1, &A.dtex);
+            rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &A.dtex, "Ambient occlusion");
             glBindTexture(GL_TEXTURE_2D, A.dtex);
             const bool st = fmt == GL_DEPTH24_STENCIL8 || fmt == GL_DEPTH32F_STENCIL8;
             if (tex_storage != nullptr && texture_view != nullptr) {
@@ -1661,6 +1673,7 @@ void mrp_lighting_ao_pass() {
             }
             if (st && tex_storage != nullptr && texture_view != nullptr) {
                 glGenTextures(1, &A.stex);
+                rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &A.stex, "Ambient occlusion");
                 texture_view(A.stex, GL_TEXTURE_2D, A.dtex, fmt, 0, 1, 0, 1);
                 glBindTexture(GL_TEXTURE_2D, A.stex);
                 glTexParameteri(GL_TEXTURE_2D, kDepthStencilTextureMode, GL_STENCIL_INDEX);
@@ -1836,7 +1849,9 @@ void mrp_lighting_ao_pass() {
             ao_n = 0;
         }
     }
+    rac1::prof::end(prof_ao);
     if (g_sun_rays > 0) {  // the sun's rays (their own textures; the blending and the bindings put back)
+        RAC1_PROF_ZONE(kSunRays);
         GLint bsrc = 0, bdst = 0, bsrca = 0, bdsta = 0, t0 = 0, t1 = 0;
         glGetIntegerv(GL_BLEND_SRC_RGB, &bsrc);
         glGetIntegerv(GL_BLEND_DST_RGB, &bdst);
@@ -2467,6 +2482,7 @@ void mrp_lighting_shadow_pass() {
     static int frames = 0, cubes_acc = 0;
     if (prof && q[0] == 0) glGenQueries(2, q);
     if (prof) glBeginQuery(GL_TIME_ELAPSED, q[0]);
+    int prof_cascades = rac1::prof::begin(rac1::prof::kShadowCascades);  // (the debug menu's profiler: the frame's shadow set-up and cascades)
     ensure_resources();
     fit_cascades();
     // the game's dynamic point lights in use (0x1804c0 + 0x10) with a colour and a radius: lit per pixel this frame
@@ -2573,6 +2589,7 @@ void mrp_lighting_shadow_pass() {
             State::Cache& ca = g_sh.cache[k];
             if (ca.stex == 0 || ca.stex_res != cres) {
                 if (ca.stex == 0) glGenTextures(1, &ca.stex);
+                rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &ca.stex, "Shadows: static cache");
                 glBindTexture(GL_TEXTURE_2D, ca.stex);
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, cres, cres, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -2676,6 +2693,7 @@ void mrp_lighting_shadow_pass() {
             constexpr int R = 1024;
             if (rtex == 0) {
                 glGenTextures(1, &rtex);
+                rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &rtex, "Shadows: reference (testing)");
                 glBindTexture(GL_TEXTURE_2D, rtex);
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, R, R, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
                 glGenFramebuffers(1, &rfbo);
@@ -2712,7 +2730,12 @@ void mrp_lighting_shadow_pass() {
         glEndQuery(GL_TIME_ELAPSED);
         glBeginQuery(GL_TIME_ELAPSED, q[1]);
     }
-    point_shadows_pass();
+    rac1::prof::end(prof_cascades);
+    prof_cascades = -1;
+    {
+        RAC1_PROF_ZONE(kPointCubes);
+        point_shadows_pass();
+    }
     if (prof) {
         glEndQuery(GL_TIME_ELAPSED);
         for (int k = 0; k < 2; ++k) {
