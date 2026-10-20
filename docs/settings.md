@@ -59,7 +59,27 @@ headless runs) the row is the game's own Mono / Stereo.
 | AO Intensity | 25, 50, 75, 100, 125 (%) | 75 |
 | Texture Detail | Full, Original (PS2) | Full |
 
-- **The frame-rate cap** only paces the picture. The game itself always runs at 60 frames a second.
+- **The frame-rate cap** only paces the picture. The game itself always runs at 60 frames a second,
+  and the port draws one picture per game frame (there is no interpolation between them): a host
+  frame that comes before the next game frame shows nothing new and is not presented. So the picture
+  changes 60 times a second at most whatever the cap: 120, 144, 240 and Unlimited all present 60
+  pictures a second, on a precise 1/60 s slot (Unlimited too; up to 0.4.0 its presents came at
+  the end of each frame's work, unevenly). Only 30 lowers it. On a 120 / 240 Hz display each picture is
+  simply held for 2 / 4 refreshes; a counter that reads 60 (or a 240 Hz display that shows 60) is the
+  game's rate, not V-Sync. Above 60 the cap applies only while the debug menu holds the game.
+- **V-Sync** sets the swap interval: On waits for the display's refresh (no tearing), Off does not.
+  On Wayland (KDE Plasma, GNOME) the swap interval is always 0, because an interval of 1 stops the
+  game while its window is not shown; the compositor shows whole frames anyway, so Off never tears
+  there and the row changes nothing while the game runs (with Unlimited it paces the held game at the
+  display's refresh). Mesa's EGL has no tearing support on Wayland. On X11 and Windows, Off can tear;
+  the driver can override the game's choice (Mesa: `vblank_mode=0` forces it off, `vblank_mode=3` forces it
+  on; AMD / NVIDIA control panels). The log says what was set and what the swaps do:
+  `[display] start: V-Sync off, swap interval 0 on Wayland (EGL) ...` at the start and at each
+  change of the display settings, then `[display] presents: 60.0 a second; between them median
+  16.67 ms ...; the swap waited ... ms` four seconds later (a swap that waits about a refresh each
+  time means V-Sync is in effect, whatever was asked). The debug menu's stats overlay counts
+  presents too (up to 0.4.0 it counted the host loop's turns, about twice the pictures shown with the
+  cap Unlimited: 120 for 60).
 - **Monitor** chooses which screen the window is on: fullscreen goes to it at its own mode, and in
   window mode the window is centred on it. GLFW cannot place a window on Wayland, where the
   compositor decides, so the window mode half does nothing there. The choice is kept by the
