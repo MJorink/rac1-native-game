@@ -46,7 +46,7 @@ extern int g_ao_intensity;
 void mrp_lighting_ao_moby_mark(bool begin);
 // orig: (host) ambient occlusion on the 3D (screen space, from the depth; 0 off, the default; RAC1_AO; Options > Graphics)
 extern int g_ao;
-// orig: (host) the sun's rays (light shafts, screen space): 0 off (default), 1 Low, 2 High (RAC1_SUN_RAYS; Options > Graphics > Sun Rays)
+// orig: (host) the sun's rays (light shafts, screen space): 0 off (default), 1 Low, 2 Medium, 3 High (RAC1_SUN_RAYS; Options > Graphics > Sun Rays)
 extern int g_sun_rays;
 // orig: (host) the ambient occlusion over this frame's 3D (after the MRP world and mobys, before the effects and the 2D;
 // the framebuffer they were drawn into bound): nothing unless the modern lighting drew this frame and g_ao is on

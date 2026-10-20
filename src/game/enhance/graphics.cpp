@@ -138,7 +138,7 @@ constexpr const char* TEXTS[4][T_COUNT] = {
      "Soft darkening where surfaces meet. Costs more.",
      "Full: every texture level, smooth. Original (PS2): the GS's own mip choice.",
      "How dark the sun's shadows are. Lower: the shade lit by the sky.",
-     "Shafts of sunlight through openings toward the sun. Costs a little.",
+     "Shafts of sunlight through openings. Higher: finer, costs more.",
      "How dark the ambient occlusion is. Characters get less of it.",
      "How wide the HUD spreads in a widened view. 4:3: as the original.",
      "Window", "Fullscreen", "4:3 Original", "16:9", "Fill Screen", "Black Bars", "Stretch", "21:9", "32:9", "Fit Screen",
@@ -160,7 +160,7 @@ constexpr const char* TEXTS[4][T_COUNT] = {
      "Weiche Abdunklung, wo Flachen sich treffen. Aufwendiger.",
      "Voll: alle Texturstufen, weich. Original (PS2): die Mip-Wahl der GS.",
      "Wie dunkel die Sonnenschatten sind. Weniger: vom Himmel erhellt.",
-     "Lichtstrahlen der Sonne durch Offnungen. Etwas aufwendiger.",
+     "Lichtstrahlen der Sonne durch Offnungen. Hoher: feiner, aufwendiger.",
      "Wie dunkel die Umgebungsverdeckung ist. Figuren bekommen weniger.",
      "Wie breit das HUD in einer erweiterten Sicht ist. 4:3: wie im Original.",
      "Fenster", "Vollbild", "4:3 Original", "16:9", "Fullen", "Balken", "Strecken", "21:9", "32:9", "Ganze Breite",
@@ -182,7 +182,7 @@ constexpr const char* TEXTS[4][T_COUNT] = {
      "Sombreado suave donde las superficies se juntan. Mas pesado.",
      "Completo: todos los niveles, suave. Original (PS2): el mip de la GS.",
      "Lo oscuras que son las sombras del sol. Menos: luz del cielo.",
-     "Haces de sol a traves de las aberturas. Algo mas pesado.",
+     "Haces de sol a traves de las aberturas. Mas alto: mas fino, mas pesado.",
      "Lo oscura que es la oclusion ambiental. Los personajes, menos.",
      "Lo ancho que se extiende el HUD en una vista ampliada. 4:3: como el original.",
      "Ventana", "Completa", "4:3 Original", "16:9", "Llenar", "Bandas", "Estirar", "21:9", "32:9", "Todo el ancho",
@@ -204,7 +204,7 @@ constexpr const char* TEXTS[4][T_COUNT] = {
      "Ombreggiatura morbida dove le superfici si toccano. Piu pesante.",
      "Pieno: tutti i livelli, morbido. Originale (PS2): il mip della GS.",
      "Quanto sono scure le ombre del sole. Meno: luce del cielo.",
-     "Fasci di luce del sole attraverso le aperture. Un po' piu pesante.",
+     "Fasci di luce del sole dalle aperture. Piu alto: piu fine, piu pesante.",
      "Quanto e scura l'occlusione ambientale. I personaggi ne hanno meno.",
      "Quanto si allarga l'HUD in una visuale allargata. 4:3: come l'originale.",
      "Finestra", "Intero", "4:3 Originale", "16:9", "Riempi", "Bande nere", "Stira", "21:9", "32:9", "Tutta la larghezza",
@@ -267,7 +267,7 @@ uint32_t value_count(Setting s) {
         case S_HUD: return 5;  // 4:3 (the original), 16:9, 21:9, 32:9, the view's width
         case S_LOD: return sizeof(LODS) / sizeof(int);
         case S_SHADOW_STR: return sizeof(SHADOW_STRS) / sizeof(int);
-        case S_SUN_RAYS: return 3;  // Off, Low, High
+        case S_SUN_RAYS: return 4;  // Off, Low, Medium, High (quality; the same look)
         case S_AO_STR: return sizeof(AO_STRS) / sizeof(int);
         case S_LIGHTING: return 4;  // Original, Low, Medium, High (mrp_lighting.h: off, the maps at 1024 / 2048 / 4096)
         case S_FOV: return sizeof(FOVS) / sizeof(int);
@@ -396,7 +396,8 @@ bool prefs_read(const std::filesystem::path& path) {
         else if (std::strcmp(key, "shadow_distance") == 0 && a >= 0 && a < 4) gs_.value[S_SHADOW_DIST] = a;
         else if (std::strcmp(key, "ambient_occlusion") == 0 && a >= 0 && a < 6) gs_.value[S_AO] = a;
         else if (std::strcmp(key, "texture_detail") == 0) gs_.value[S_MIPS] = a != 0;  // (0 full, 1 original)
-        else if (std::strcmp(key, "sun_rays") == 0 && a >= 0 && a < 3) gs_.value[S_SUN_RAYS] = a;
+        else if (std::strcmp(key, "sun_rays") == 0 && a >= 0 && a < 3) gs_.value[S_SUN_RAYS] = a == 0 ? 0 : a + 1;  // (until 0.4.x: Off, Low, High - Low is Medium now)
+        else if (std::strcmp(key, "sun_rays_quality") == 0 && a >= 0 && a < 4) gs_.value[S_SUN_RAYS] = a;
         else if (std::strcmp(key, "shadow_strength") == 0) gs_.value[S_SHADOW_STR] = nearest(SHADOW_STRS, a);
         else if (std::strcmp(key, "ao_intensity") == 0) gs_.value[S_AO_STR] = nearest(AO_STRS, a);
         // ("overscan", the Overscan row's until 0.4: read like any other key and ignored, the full frame always shown)
@@ -444,7 +445,7 @@ void prefs_write() {
     if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path(), ec);
     if (FILE* f = platform::open_file(path, "w")) {
         const int* v = gs_.value;
-        std::fprintf(f, "display %d\nmonitor %s\nwindow %d %d\nrender_scale %d\naspect %d\nfit %d\nlod %d\nfov %d\nvsync %d\nfps_cap %d\nlighting %d\ndynamic_shadows %d\nsecondary_lights %d\nshadow_distance %d\nambient_occlusion %d\ntexture_detail %d\nshadow_strength %d\nsun_rays %d\nao_intensity %d\nhud %d\nmode %u\n",
+        std::fprintf(f, "display %d\nmonitor %s\nwindow %d %d\nrender_scale %d\naspect %d\nfit %d\nlod %d\nfov %d\nvsync %d\nfps_cap %d\nlighting %d\ndynamic_shadows %d\nsecondary_lights %d\nshadow_distance %d\nambient_occlusion %d\ntexture_detail %d\nshadow_strength %d\nsun_rays_quality %d\nao_intensity %d\nhud %d\nmode %u\n",
                      v[S_DISPLAY], gs_.monitor_name.c_str(), gs_.win_w, gs_.win_h, SCALES[v[S_SCALE]], v[S_ASPECT], v[S_FIT], v[S_LOD], FOVS[v[S_FOV]], v[S_VSYNC], CAPS[v[S_CAP]], v[S_LIGHTING], v[S_DYN_SHADOWS],
                      v[S_SEC_LIGHTS], v[S_SHADOW_DIST], v[S_AO], v[S_MIPS], SHADOW_STRS[v[S_SHADOW_STR]], v[S_SUN_RAYS], AO_STRS[v[S_AO_STR]], v[S_HUD], gs_.mode);
         std::fclose(f);
@@ -490,7 +491,7 @@ std::string value_text(Setting s) {
         case S_DYN_SHADOWS: return t[v != 0 ? T_ON : T_OFF];
         case S_SEC_LIGHTS: return t[v == 0 ? T_OFF : v == 1 ? T_SEC_GAME : T_SEC_ALL];
         case S_SHADOW_DIST: return t[T_LOW + v];
-        case S_SUN_RAYS: return t[v == 0 ? T_OFF : v == 1 ? T_LOW : T_HIGH];
+        case S_SUN_RAYS: return t[v == 0 ? T_OFF : T_LOW + v - 1];
         case S_SHADOW_STR: std::snprintf(b, sizeof b, "%d", SHADOW_STRS[v]); return b;  // (the font's '%' is a button)
         case S_AO_STR: std::snprintf(b, sizeof b, "%d", AO_STRS[v]); return b;
         case S_AO: {
@@ -767,7 +768,7 @@ void graphics_save_items(std::vector<uint8_t>& d, uint32_t& count) {
     const struct { uint16_t id; int value; } items[] = {
         {32, gs_.value[S_SCALE]}, {33, gs_.value[S_ASPECT]}, {34, gs_.value[S_FIT]}, {35, gs_.value[S_LOD]}, {36, gs_.value[S_FOV]}, {37, static_cast<int>(gs_.mode)},
         {38, gs_.value[S_LIGHTING]}, {39, gs_.value[S_DYN_SHADOWS]}, {40, gs_.value[S_SEC_LIGHTS]},
-        {41, gs_.value[S_SHADOW_DIST]}, {42, gs_.value[S_AO]}, {43, gs_.value[S_MIPS]}, {45, gs_.value[S_SHADOW_STR]}, {46, gs_.value[S_SUN_RAYS]}, {47, gs_.value[S_AO_STR]}, {48, gs_.value[S_HUD]},
+        {41, gs_.value[S_SHADOW_DIST]}, {42, gs_.value[S_AO]}, {43, gs_.value[S_MIPS]}, {45, gs_.value[S_SHADOW_STR]}, {47, gs_.value[S_AO_STR]}, {48, gs_.value[S_HUD]}, {49, gs_.value[S_SUN_RAYS]},
     };
     for (const auto& it : items) {
         d.push_back(static_cast<uint8_t>(it.id));
@@ -781,7 +782,7 @@ void graphics_save_items(std::vector<uint8_t>& d, uint32_t& count) {
 
 // orig: (none) — enhancement (graphics.h)
 bool graphics_save_item(uint32_t id, const uint8_t* data, uint32_t size) {
-    if (id < 32 || id > 48) return false;
+    if (id < 32 || id > 49) return false;
     if (size < 1) return true;
     const int v = data[0];
     switch (id) {
@@ -798,7 +799,8 @@ bool graphics_save_item(uint32_t id, const uint8_t* data, uint32_t size) {
         case 42: if (v < 6) gs_.value[S_AO] = v; break;
         case 43: if (v < 2) gs_.value[S_MIPS] = v; break;
         case 44: return true;  // (the Overscan row's until 0.4: ignored, the full frame always shown)
-        case 46: if (v < 3) gs_.value[S_SUN_RAYS] = v; break;
+        case 46: if (v < 3) gs_.value[S_SUN_RAYS] = v == 0 ? 0 : v + 1; break;  // (until 0.4.x: Off, Low, High - Low is Medium now)
+        case 49: if (v < 4) gs_.value[S_SUN_RAYS] = v; break;
         case 45: if (v < static_cast<int>(value_count(S_SHADOW_STR))) gs_.value[S_SHADOW_STR] = v; break;
         case 47: if (v < static_cast<int>(value_count(S_AO_STR))) gs_.value[S_AO_STR] = v; break;
         case 48: if (v < 5) gs_.value[S_HUD] = v; break;

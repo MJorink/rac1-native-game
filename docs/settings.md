@@ -52,7 +52,7 @@ headless runs) the row is the game's own Mono / Stereo.
 | Level of Detail | Original, Low, Medium, High, Maximum | Original |
 | Lighting | Original, Low, Medium, High | Original |
 | Shadow Strength | 50, 60, 70, 80, 90, 100 (%) | 70 |
-| Sun Rays | Off, Low, High | Off |
+| Sun Rays | Off, Low, Medium, High (more quality and cost each step; Medium is the Low of 0.4.x, High its High, finer) | Off |
 | Shadow Distance | Low, Medium, High, Maximum | Maximum |
 | Dynamic Shadows | Off, On | Off |
 | Secondary Lights | Off, Game's, All | All |
