@@ -44,6 +44,7 @@ int g_point_shadows = env_int("RAC1_POINT_SHADOWS", 0);
 int g_auto_lights = env_int("RAC1_AUTO_LIGHTS", 1);
 int g_shadow_cache = env_int("RAC1_SHADOW_CACHE", 1);
 int g_user_light_selected = -1;
+int g_ao_intensity = std::clamp(env_int("RAC1_AO_INTENSITY", 75), 0, 200);
 int g_ao = env_int("RAC1_AO", 0);
 int g_sun_rays = env_int("RAC1_SUN_RAYS", 0);
 float g_shadow_moby_dist = std::getenv("RAC1_SHADOW_MOBY_DIST") != nullptr ? static_cast<float>(std::atof(std::getenv("RAC1_SHADOW_MOBY_DIST"))) : 0.0f;
@@ -996,6 +997,8 @@ const char* kAoBlurFs = R"(#version 460 core
 in vec2 vUv;
 uniform sampler2D uAo, uDepth;
 uniform vec2 uTexel;
+uniform usampler2D uStencil;  // (the depth's stencil: bit 0 the mobys' pixels, mrp_lighting_ao_moby_mark)
+uniform float uMoby;          // (the share of the occlusion the mobys' pixels keep; 1: all, the stencil not read)
 out vec4 FragColor;
 void main() {
     float d0 = texture(uDepth, vUv).r;
@@ -1010,13 +1013,17 @@ void main() {
             w += k;
         }
     float ao = w > 0.0 ? sum / w : 1.0;
-    FragColor = vec4(vec3(ao), 1.0);
+    float k = 1.0;
+    if (uMoby < 1.0 && (texture(uStencil, vUv).r & 1u) != 0u) k = uMoby;
+    FragColor = vec4(vec3(mix(1.0, ao, k)), 1.0);
 }
 )";
 const char* kAoBlurSepFs = R"(#version 460 core
 in vec2 vUv;
 uniform sampler2D uAo, uDepth;
 uniform vec2 uTexel;
+uniform usampler2D uStencil;  // (the depth's stencil: bit 0 the mobys' pixels, mrp_lighting_ao_moby_mark)
+uniform float uMoby;          // (the share of the occlusion the mobys' pixels keep; 1: all, the stencil not read)
 out vec4 FragColor;
 void main() {
     float d0 = texture(uDepth, vUv).r;
@@ -1033,7 +1040,9 @@ void main() {
         w += k1 + k2;
     }
     float ao = w > 1e-5 ? sum / w : 1.0;
-    FragColor = vec4(vec3(ao), 1.0);
+    float k = 1.0;
+    if (uMoby < 1.0 && (texture(uStencil, vUv).r & 1u) != 0u) k = uMoby;
+    FragColor = vec4(vec3(mix(1.0, ao, k)), 1.0);
 }
 )";
 GLuint ao_compile(GLenum type, const char* src) {
@@ -1065,13 +1074,26 @@ GLuint ao_link(const char* fs) {
 struct Ao {
     GLuint prog = 0, blur = 0, blur_sep = 0, vao = 0;
     GLuint dfbo = 0, dtex = 0, afbo = 0, atex = 0, bfbo = 0, btex = 0;
+    GLuint stex = 0;  // (a stencil view of dtex, when the depth has a stencil)
     int w = 0, h = 0, aw = 0, ah = 0;
     GLint last_fb = -1;
     GLenum dfmt = 0;
     GLint u_depth = -1, u_inv_vp = -1, u_vp = -1, u_cam = -1, u_param = -1;
-    GLint u_b_depth = -1, u_b_ao = -1, u_b_texel = -1;
-    GLint u_bs_depth = -1, u_bs_ao = -1, u_bs_texel = -1;
+    GLint u_b_depth = -1, u_b_ao = -1, u_b_texel = -1, u_b_st = -1, u_b_moby = -1;
+    GLint u_bs_depth = -1, u_bs_ao = -1, u_bs_texel = -1, u_bs_st = -1, u_bs_moby = -1;
 } g_ao_s;
+// The mobys' pixels (mrp_lighting_ao_moby_mark): stencil bit 0 set where the MRP drew a moby this frame. Screen-space occlusion
+// sees a character's own arms, head and body overlapping as creases (Big Al's face and arms in his shop): on those pixels only a
+// share of the occlusion is kept (RAC1_AO_MOBY, percent, default 40), the world's pixels around them keep all of it (the contact
+// darkening on the ground under a crate or a character). The stencil is free while the modern lighting draws (the original's drop
+// shadows, its only other user, are never drawn then)
+struct AoMark {
+    bool active = false;  // marking (between begin and end)
+    bool done = false;    // this frame's mobys marked, into `fb`
+    GLint fb = -1;
+    GLint stencil_fb = -1;  // (the framebuffer whose stencil was looked at, and whether it has one)
+    bool stencil = false;
+} g_ao_mark;
 
 // ---- the sun's rays (Options > Graphics > Sun Rays) ------------------------------------------------------------------------
 //
@@ -1488,6 +1510,42 @@ float view_open() { return g_probe.k; }
 }  // namespace
 
 // orig: (host) see mrp_lighting.h
+void mrp_lighting_ao_moby_mark(bool begin) {
+    AoMark& M = g_ao_mark;
+    if (!begin) {
+        if (!M.active) return;
+        M.active = false;
+        glDisable(GL_STENCIL_TEST);
+        glStencilMask(0xff);
+        return;
+    }
+    M.active = false;
+    M.done = false;
+    static const bool all = env_int("RAC1_AO_MOBY", 40) >= 100;  // (testing: the mobys with all of the occlusion, as the world)
+    if (!g_sh.on || g_ao == 0 || all) return;
+    GLint fb = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &fb);
+    if (fb != M.stencil_fb) {  // (has the framebuffer drawn into a stencil? the scaled scene's buffer has; the window's, as it was made)
+        GLint sbits = 0;
+        const GLenum satt = fb == 0 ? GL_STENCIL : GL_STENCIL_ATTACHMENT;
+        glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, satt, GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, &sbits);
+        while (glGetError() != GL_NO_ERROR) {}
+        M.stencil_fb = fb;
+        M.stencil = sbits > 0;
+    }
+    if (!M.stencil) return;
+    // (the stencil was cleared with the depth at the frame's start - orig_main -, nothing writes it before the mobys; written whole,
+    // 1: a partial write mask on a packed depth-stencil buffer is a read-modify-write)
+    glEnable(GL_STENCIL_TEST);
+    glStencilFunc(GL_ALWAYS, 1, 0xff);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+    glStencilMask(0xff);
+    M.active = true;
+    M.done = true;
+    M.fb = fb;
+}
+
+// orig: (host) see mrp_lighting.h
 void mrp_lighting_ao_pass() {
     if (!g_sh.on) return;
     int vp[4];
@@ -1548,14 +1606,17 @@ void mrp_lighting_ao_pass() {
             A.u_b_depth = glGetUniformLocation(A.blur, "uDepth");
             A.u_b_ao = glGetUniformLocation(A.blur, "uAo");
             A.u_b_texel = glGetUniformLocation(A.blur, "uTexel");
+            A.u_b_st = glGetUniformLocation(A.blur, "uStencil");
+            A.u_b_moby = glGetUniformLocation(A.blur, "uMoby");
             A.u_bs_depth = glGetUniformLocation(A.blur_sep, "uDepth");
             A.u_bs_ao = glGetUniformLocation(A.blur_sep, "uAo");
             A.u_bs_texel = glGetUniformLocation(A.blur_sep, "uTexel");
+            A.u_bs_st = glGetUniformLocation(A.blur_sep, "uStencil");
+            A.u_bs_moby = glGetUniformLocation(A.blur_sep, "uMoby");
             glGenVertexArrays(1, &A.vao);
             glGenFramebuffers(1, &A.dfbo);
             glGenFramebuffers(1, &A.afbo);
             glGenFramebuffers(1, &A.bfbo);
-            glGenTextures(1, &A.dtex);
             glGenTextures(1, &A.atex);
             glGenTextures(1, &A.btex);
         }
@@ -1579,10 +1640,35 @@ void mrp_lighting_ao_pass() {
             A.aw = aw;
             A.ah = ah;
             A.dfmt = fmt;
+            // (immutable storage, made again at each size: the stencil's view needs it; GL 4.2 / 4.3, not in the loader's header)
+            using PfnTexStorage2D = void(APIENTRYP)(GLenum, GLsizei, GLenum, GLsizei, GLsizei);
+            using PfnTextureView = void(APIENTRYP)(GLuint, GLenum, GLuint, GLenum, GLuint, GLuint, GLuint, GLuint);
+            static const PfnTexStorage2D tex_storage = reinterpret_cast<PfnTexStorage2D>(glfwGetProcAddress("glTexStorage2D"));
+            static const PfnTextureView texture_view = reinterpret_cast<PfnTextureView>(glfwGetProcAddress("glTextureView"));
+            constexpr GLenum kDepthStencilTextureMode = 0x90ea;  // (GL_DEPTH_STENCIL_TEXTURE_MODE, GL 4.3)
+            if (A.stex != 0) glDeleteTextures(1, &A.stex);
+            if (A.dtex != 0) glDeleteTextures(1, &A.dtex);
+            A.stex = 0;
+            glGenTextures(1, &A.dtex);
             glBindTexture(GL_TEXTURE_2D, A.dtex);
             const bool st = fmt == GL_DEPTH24_STENCIL8 || fmt == GL_DEPTH32F_STENCIL8;
-            glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(fmt), w, h, 0, st ? GL_DEPTH_STENCIL : GL_DEPTH_COMPONENT,
-                         fmt == GL_DEPTH24_STENCIL8 ? GL_UNSIGNED_INT_24_8 : fmt == GL_DEPTH32F_STENCIL8 ? GL_FLOAT_32_UNSIGNED_INT_24_8_REV : GL_FLOAT, nullptr);
+            if (tex_storage != nullptr && texture_view != nullptr) {
+                tex_storage(GL_TEXTURE_2D, 1, fmt, w, h);
+            } else {  // (no view: the mobys get all of the occlusion)
+                glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(fmt), w, h, 0, st ? GL_DEPTH_STENCIL : GL_DEPTH_COMPONENT,
+                             fmt == GL_DEPTH24_STENCIL8 ? GL_UNSIGNED_INT_24_8 : fmt == GL_DEPTH32F_STENCIL8 ? GL_FLOAT_32_UNSIGNED_INT_24_8_REV : GL_FLOAT, nullptr);
+            }
+            if (st && tex_storage != nullptr && texture_view != nullptr) {
+                glGenTextures(1, &A.stex);
+                texture_view(A.stex, GL_TEXTURE_2D, A.dtex, fmt, 0, 1, 0, 1);
+                glBindTexture(GL_TEXTURE_2D, A.stex);
+                glTexParameteri(GL_TEXTURE_2D, kDepthStencilTextureMode, GL_STENCIL_INDEX);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                glBindTexture(GL_TEXTURE_2D, A.dtex);
+            }
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -1634,7 +1720,8 @@ void mrp_lighting_ao_pass() {
         static const float kRadius[6] = {0.0f, 1.5f, 1.5f, 3.0f, 3.0f, 3.0f}, kStrength[6] = {0.0f, 1.0f, 1.2f, 2.0f, 2.5f, 2.5f};
         const int mi = std::clamp(g_ao, 1, 5);
         const float radius = env_r >= 0 ? static_cast<float>(env_r) / 100.0f : kRadius[mi];
-        const float strength = env_s >= 0 ? static_cast<float>(env_s) / 100.0f : kStrength[mi];
+        // (Options > Graphics > AO Intensity: the mode's strength scaled, 75 % by default)
+        const float strength = (env_s >= 0 ? static_cast<float>(env_s) / 100.0f : kStrength[mi]) * static_cast<float>(g_ao_intensity) / 100.0f;
         const int shader_mode = (g_ao >= 5) ? 4 : g_ao;
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, A.afbo);
         glViewport(0, 0, aw, ah);
@@ -1678,6 +1765,15 @@ void mrp_lighting_ao_pass() {
         }
         glActiveTexture(GL_TEXTURE1);
         glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex1);
+        // the multiply into the colour: the world's pixels with all of the occlusion, the mobys' (stencil bit 0, marked this
+        // frame into this framebuffer, read through dtex's stencil view) with their share
+        static const float moby_k = static_cast<float>(std::clamp(env_int("RAC1_AO_MOBY", 40), 0, 100)) / 100.0f;
+        const float moby = g_ao_mark.done && g_ao_mark.fb == fb && A.stex != 0 ? moby_k : 1.0f;
+        GLint prev_tex2 = 0;
+        glActiveTexture(GL_TEXTURE2);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex2);
+        glBindTexture(GL_TEXTURE_2D, A.stex);
+        glActiveTexture(GL_TEXTURE1);
         if (g_ao == 1) {
             // original SSAO: 5x5 box depth-threshold blur multiplied into the colour
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(fb));
@@ -1690,12 +1786,15 @@ void mrp_lighting_ao_pass() {
             glUniform1i(A.u_b_depth, 0);
             glUniform1i(A.u_b_ao, 1);
             glUniform2f(A.u_b_texel, 1.0f / static_cast<float>(w), 1.0f / static_cast<float>(h));
+            glUniform1i(A.u_b_st, 2);
+            glUniform1f(A.u_b_moby, moby);
             glDrawArrays(GL_TRIANGLES, 0, 3);
         } else {
             // SSAO+ / HBAO / GTAO / GTAO 1/2: 9-tap separable bilateral depth-weighted blur (horizontal -> btex, vertical -> fb)
             glUseProgram(A.blur_sep);
             glUniform1i(A.u_bs_depth, 0);
             glUniform1i(A.u_bs_ao, 1);
+            glUniform1i(A.u_bs_st, 2);
             // Pass 1: horizontal blur (also upsamples half-res atex to full-res btex via full-res depth guidance)
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, A.bfbo);
             glViewport(0, 0, w, h);
@@ -1703,6 +1802,7 @@ void mrp_lighting_ao_pass() {
             glDisable(GL_BLEND);
             glBindTexture(GL_TEXTURE_2D, A.atex);
             glUniform2f(A.u_bs_texel, 1.0f / static_cast<float>(aw), 0.0f);
+            glUniform1f(A.u_bs_moby, 1.0f);  // (the share taken at the end: the blur mixes the mobys' edges with the world's)
             glDrawArrays(GL_TRIANGLES, 0, 3);
             // Pass 2: vertical blur multiplied into the colour
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(fb));
@@ -1712,14 +1812,18 @@ void mrp_lighting_ao_pass() {
             glBlendFunc(GL_DST_COLOR, GL_ZERO);
             glBindTexture(GL_TEXTURE_2D, A.btex);
             glUniform2f(A.u_bs_texel, 0.0f, 1.0f / static_cast<float>(h));
+            glUniform1f(A.u_bs_moby, moby);
             glDrawArrays(GL_TRIANGLES, 0, 3);
         }
         glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev_tex1));
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev_tex2));
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prev_tex));
         glDepthMask(dmask);
         glBlendFuncSeparate(static_cast<GLenum>(bsrc), static_cast<GLenum>(bdst), static_cast<GLenum>(bsrca), static_cast<GLenum>(bdsta));
     }
+    g_ao_mark.done = false;
     if (ao_prof && g_ao != 0) {
         glEndQuery(GL_TIME_ELAPSED);
         GLuint64 ns = 0;
