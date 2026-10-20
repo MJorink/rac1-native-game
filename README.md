@@ -5,13 +5,13 @@
 > port. This release fixes the bugs reported on 0.3.0 (the crashes on Quartu and Kalebo III, modern
 > aiming, several graphics glitches), and Quit Game now goes back to the title screen. **The whole
 > game has been played through to the end** on 0.4.0, and the start of a New Game+ checked; the
-> second half has had one full playthrough so far, so expect some bugs and glitches. So far it has
-> been tested on Linux only (Windows is experimental).
+> second half has had one full playthrough so far, so expect some bugs and glitches. It runs on Linux and
+> on Windows.
 > Since 0.4.0, `main` has gained a launcher for Windows and Linux, a reworked modern lighting,
 > 5.1 / 7.1 sound and more fixes: see the [Changelog](CHANGELOG.md#unreleased).
 > See [Status](docs/status.md).
 
-A native PC port of **Ratchet & Clank** (PlayStation 2, 2002), for Linux, and experimentally for Windows.
+A native PC port of **Ratchet & Clank** (PlayStation 2, 2002), for Linux and Windows.
 
 The game's own code is ported to C++, function by function, from the original North American release
 (`SCUS-97199`), and each port is proved against the original code. Support for the
@@ -45,17 +45,17 @@ So far the port has been tested on one machine only:
 - **Memory:** 64 GB
 - **System:** Ubuntu 26.04 LTS, Linux 7.0, Mesa 26.0 (radeonsi, OpenGL 4.6)
 
-Windows has been tried on one PC so far (see [Windows support is experimental](#windows-support-is-experimental)).
+Windows is supported too: players have played through the game on it, and it is tested on a laptop (see [Windows](#windows)).
 
 Other hardware, drivers and distributions should work, but they have not been tried yet. Reports
 are welcome.
 
-### Windows support is experimental
+### Windows
 
-The game builds and runs on Windows from the same sources, and most of it works without problems
-in the tests so far. But Windows has been tried on one PC only, and much less than Linux: bugs that
-only Windows shows can't be excluded. Linux remains the reference. Reports are welcome. See
-[Setup](docs/setup.md#on-windows-experimental) and [Platforms](docs/platforms.md).
+The game builds and runs on Windows from the same sources, and players have played through it there;
+the launcher installs and updates it with a double-click. Linux remains the main development platform,
+so a bug that only Windows shows is still possible: reports are welcome. See
+[Setup](docs/setup.md#on-windows) and [Platforms](docs/platforms.md).
 
 ### Modern lighting is experimental
 
@@ -115,7 +115,7 @@ follows from that.
 
 ## Quick start
 
-You need Linux (or Windows, [experimental](#windows-support-is-experimental)), a GPU with OpenGL 4.6,
+You need Linux or [Windows](#windows), a GPU with OpenGL 4.6,
 and your ISO of the game (the North American or the European PAL disc).
 
 **The easiest way, on Windows and Linux, is the launcher**: download `rac1-launcher.exe` (Windows) or
@@ -142,7 +142,7 @@ game's code from it, builds the game and generates the game's data. Run it again
 
 The full guide, with requirements and troubleshooting: [Setup](docs/setup.md). On Windows without
 the launcher, run `setup.cmd` from the repository's folder, then play with `play.cmd`: see
-[Setup](docs/setup.md#on-windows-experimental).
+[Setup](docs/setup.md#on-windows).
 
 At start the game checks, in the background, whether a newer version is out, and says so at the main menu
 (it downloads nothing; this is new and still a work in progress). That is one anonymous request to GitHub's API, no telemetry; Options > Advanced >
@@ -158,7 +158,7 @@ For players:
   the update check, where settings are kept, the debug tools.
 - [Input](docs/input.md): controllers, keyboard and mouse, rebinding.
 - [Saves](docs/saves.md): where your saves are. Saving and loading work, but the save files may still change: they have not been checked by hand yet.
-- [Platforms](docs/platforms.md): Windows (experimental) and macOS later.
+- [Platforms](docs/platforms.md): Windows, and macOS later.
 - [Advanced options](docs/advanced.md): the optional gameplay changes, including Ratchet & Clank 3
   movement and modern aiming.
 - [Enhancements](docs/enhancements.md): the optional improvements, those available now and those

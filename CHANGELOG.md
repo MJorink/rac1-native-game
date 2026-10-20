@@ -8,7 +8,8 @@ What changed in each release. Releases are source only: you build the game with 
 What `main` has since 0.4.0, for the next release. The project moved to the
 [RAC-Native](https://github.com/RAC-Native) organization on GitHub:
 <https://github.com/RAC-Native/rac1-native-game> (the old address redirects). The updater, the
-update check and the launcher use the new address.
+update check and the launcher use the new address. Windows is no longer experimental: players have
+played through the game on it, and the launcher installs and updates it with a double-click.
 
 ### Graphics
 - **The full frame, always:** the Overscan row is removed. The thin slivers the game itself leaves

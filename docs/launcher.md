@@ -95,7 +95,7 @@ The game's other settings (graphics, controls) are in the game's Options menu.
 The launcher does what `setup.cmd` and `./setup.sh` do, without a console window:
 
 1. On Windows, `tools\windows\toolchain.ps1`: the private MSYS2 in `.toolchain\` (see
-   [Setup](setup.md#on-windows-experimental)).
+   [Setup](setup.md#on-windows)).
 2. `tools/setup.py --no-play --iso <your image>` (with `--update --channel ...` to update, `--force`
    to set up again from scratch), with `RAC1_LAUNCHER=1`: the setup then also prints `@step` and
    `@progress` lines, which the launcher shows as its progress bar. On Linux it runs with the system's

@@ -1,10 +1,6 @@
 # Other platforms
 
-> **Windows support is experimental.** It builds and runs, and most of it works without problems in
-> the tests so far, but it has been tried on one PC only: bugs that only Windows shows can't be
-> excluded. Linux remains the reference.
-
-rac1-native runs on Linux x86-64, and on Windows x86-64 (experimental). This page is the state of the
+rac1-native runs on Linux x86-64, and on Windows x86-64. This page is the state of the
 Windows port, what remains, and a note on macOS.
 
 The goal is one codebase that builds on Linux and Windows and behaves identically on both: same
@@ -105,7 +101,7 @@ sources, which `./setup.sh` makes on Linux: they are the same on Windows.
 2. Done: the Windows implementations, the clang / MinGW-w64 build, the toolchain files. The full
    game also cross-compiles and links from Linux with clang and with GCC.
 3. Done: the setup (`setup.cmd`, or `./setup.sh` in MSYS2's shell; both run `tools/setup.py`), and
-   the Windows instructions in [Setup](setup.md#on-windows-experimental).
+   the Windows instructions in [Setup](setup.md#on-windows).
 4. Done: the CI workflow (Linux, Windows, and the Windows cross-build). Run and played on one Windows
    PC. To do: more Windows machines, the reference runs and the oracle on Windows, a longer
    playtest.

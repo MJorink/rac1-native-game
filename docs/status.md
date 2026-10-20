@@ -136,7 +136,7 @@ nothing, so an object whose class is not ported stands still or does not appear.
   [Rendering](rendering.md#limits)).
 - **A widescreen HUD.** In widescreen the HUD and the menus stay 4:3 in the middle of the screen;
   a HUD laid out for the extra width is planned (see [Enhancements](enhancements.md#picture)).
-- **Platforms.** Linux x86-64; Windows x86-64 is experimental (see [Platforms](platforms.md)). A port
+- **Platforms.** Linux x86-64; Windows x86-64 (see [Platforms](platforms.md)). A port
   to ARM64 and Android is in progress on the `port/android` branch (#78); the CI has a Linux ARM64
   job, not blocking yet. Vulkan / Direct3D renderers and macOS may come later.
 - **Regions.** The North American disc (`SCUS-97199`) is the reference. The European PAL disc
