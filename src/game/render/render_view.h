@@ -7,6 +7,9 @@
 #include <glm/glm.hpp>
 
 #include <cstddef>
+#include <cstdint>
+#include <utility>
+#include <vector>
 
 namespace rac1 {
 
@@ -64,5 +67,15 @@ void render_view_note_write(float written, float base);
 // orig: (host) the view's game inputs (the view matrix, the projection tangents, the depth mapping, the camera) captured
 // now for a frame drawn later (render_toggles.h g_draw_from_snapshot)
 void render_view_snapshot();
+
+// orig: (host) the full-screen 2D layers the game draws in pieces over its whole 4:3 frame from a draw list's callback (the
+// Visibomb's out-of-range static, class 832's callback on every level that has it: a grid of 32 x 32 sprites): in a widened
+// view the GS replica stretches them across the window (gs::Primitive::layer). render_frame clears the notes
+// (render_view_layers_begin); the draw lists' runner notes each such callback's chain range [first, end) of the real block
+// (render_view_layer_note: the shadow runs' are not noted); the chain's stage takes them for the replica (the tag ranges,
+// inclusive). Nothing of the game's state is read or written but the packet cursor's values the caller passes.
+void render_view_layers_begin();
+void render_view_layer_note(uint32_t first, uint32_t end);
+std::vector<std::pair<uint32_t, uint32_t>> render_view_layers();
 
 }  // namespace rac1

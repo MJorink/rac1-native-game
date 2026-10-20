@@ -293,7 +293,15 @@ Before this, the game's state diverged on most frames of the Veldin intro when t
 after it, its state is identical at 4:3 and at 5120x1440.
 
 The HUD and the menus stay 4:3 in the middle of the screen; full-screen 2D such as fades reaches the
-edges. The whole frame is shown, as the PS2 drew it, with one exception: a HUD element hiding parks its
+edges: a primitive covering the frame's whole width or height has its vertices on the frame's edges
+moved to the window's. A flat fill counts when it covers every pixel of the frame as the GS fills it,
+so the fills the game draws with the HUD's half-pixel offset (x -0.5 .. 511.5: the Visibomb's green
+screen and its scan lines, 0x1f9df8) reach the edges too; a textured one only when it reaches the
+edges themselves, so a picture (the level exit's card banners) keeps its shape. The Visibomb's
+out-of-range static (class 832's draw-list callback, a grid of 32 x 32 sprites over the frame, the
+same code on every level that has it) is a full-screen layer drawn in pieces: its chain range is
+noted when the callback runs and the GS replica stretches it horizontally about the frame's centre to
+the window's width (`gs::Primitive::layer`). The whole frame is shown, as the PS2 drew it, with one exception: a HUD element hiding parks its
 3 leftmost columns at the frame's right edge for 16 frames (the Suck Cannon's gauge and the air meter, the
 game's own `hud_plain_update` 0x235ea0), which a TV's overscan hid and which in widescreen sits inside the
 picture; the modern view does not draw such slivers (a textured 2D primitive with at most 4 frame pixels

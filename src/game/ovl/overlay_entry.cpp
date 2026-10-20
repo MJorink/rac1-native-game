@@ -21,6 +21,7 @@
 #include <game/render/mrp_lod.h>
 #include <game/render/mrp_world_scene.h>
 #include <game/render/render_toggles.h>
+#include <game/render/render_view.h>
 #include <game/ovl/pause_menu.h>
 #include <game/ovl/pause_menu_pages.h>
 #include <game/ovl/particles_draw.h>
@@ -444,6 +445,7 @@ void render_frame() {
     if (lv == 0 || lh(lv + 4) != 0 || (flags() & 1) == 0 || lw(EN + 8) == 0 || lw(OV(0x0016c08c)) != 0) sub_00200fd8();
     mrp_lod_frame_begin();  // (host: testing only, RAC1_WIDEN_REF)
     mrp_fx_frame_begin();   // (host)
+    render_view_layers_begin();  // (host)
     render_view_setup();
     moby_anim_lerp_slots_validate();
     zones_update();

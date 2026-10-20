@@ -703,9 +703,19 @@ void draw(const Gs& gs, int win_w, int win_h, float FB_W, float FB_H, const Dept
             if (std::ceil(bx0) >= bx1 || std::ceil(by0) >= by1) continue;
         }
         // the 2D over the frame's whole width or height (a fade, a darkening in strips): its
-        // vertices at the frame's edges moved to the window's
+        // vertices at the frame's edges moved to the window's. A flat (untextured) fill is "whole" as the GS fills it: every
+        // column / row of the frame covered (pixel x drawn when x0 <= x < x1), so a fill drawn with the HUD's half-pixel offset
+        // (quad_fill 0x1fa0e0: x -0.5 .. 511.5; the Visibomb's green screen and scan lines 0x1f9df8) is one too; a textured
+        // one only when it reaches the edges themselves (a picture - the level exit's card banners at -0.5 .. 511.5, their text -
+        // keeps its 4:3 shape)
         bool to_left = false, to_right = false, full_span = false, edge_fill = false;
-        if (!to_rt && (sx < 1.0f || crop_on)) {
+        if (!to_rt && p.layer && !proj3d && !p.vu && sx < 1.0f) {
+            // a full-screen 2D layer the game draws in pieces over its 4:3 frame (Primitive::layer: the Visibomb's
+            // out-of-range static, a grid of sprites past the frame's edges): stretched about the frame's centre to the window's
+            // width, its pieces past the frame's sides drawn there (the scissor to the window's edges)
+            for (V& q : verts) q.x = FB_W * 0.5f + (q.x - FB_W * 0.5f) / sx;
+            to_left = to_right = full_span = true;
+        } else if (!to_rt && (sx < 1.0f || crop_on)) {
             float x0 = verts[0].x, x1 = x0, y0 = verts[0].y, y1 = y0;
             for (const V& q : verts) {
                 x0 = std::min(x0, q.x);
@@ -713,16 +723,17 @@ void draw(const Gs& gs, int win_w, int win_h, float FB_W, float FB_H, const Dept
                 y0 = std::min(y0, q.y);
                 y1 = std::max(y1, q.y);
             }
-            full_span = (x0 <= 0.0f && x1 >= FB_W) || (y0 <= 0.0f && y1 >= FB_H);
+            const float far_x = tme ? FB_W : FB_W - 0.5f, far_y = tme ? FB_H : FB_H - 0.5f;  // (the far edge reached)
+            full_span = (x0 <= 0.0f && x1 >= far_x) || (y0 <= 0.0f && y1 >= far_y);
             // a flat (untextured) fill reaching the frame's edge: a part of a fill covering the screen in pieces (a
             // transition's wipe, Kerwan's talks), never cut by the crop (the band would show through)
             if (crop_on && !tme && (x0 <= 0.0f || x1 >= FB_W || y0 <= 0.0f || y1 >= FB_H)) edge_fill = true;
             if (full_span && sx < 1.0f) {
                 to_left = x0 <= 0.0f;
-                to_right = x1 >= FB_W;
+                to_right = x1 >= far_x;
                 for (V& q : verts) {
                     if (q.x <= 0.0f) q.x = FB_W * 0.5f * (1.0f - 1.0f / sx);
-                    else if (q.x >= FB_W) q.x = FB_W * 0.5f * (1.0f + 1.0f / sx);
+                    else if (q.x >= far_x) q.x = FB_W * 0.5f * (1.0f + 1.0f / sx);
                 }
             }
         }
@@ -792,7 +803,7 @@ void draw(const Gs& gs, int win_w, int win_h, float FB_W, float FB_H, const Dept
         int x0 = static_cast<int>(field(st.scissor, 0, 11)), x1 = static_cast<int>(field(st.scissor, 16, 11));
         int y0 = static_cast<int>(field(st.scissor, 32, 11)), y1 = static_cast<int>(field(st.scissor, 48, 11));
         // the 2D slivers at the frame's edges (Viewport::hide_edge_slivers): at most 4 frame pixels inside, the rest outside
-        if (v.hide_edge_slivers && !to_rt && tme && !crop_3d && !p.vu && !p.wide) {
+        if (v.hide_edge_slivers && !to_rt && tme && !crop_3d && !p.vu && !p.wide && !(p.layer && full_span)) {
             float bx0 = verts[0].x, bx1 = bx0, by0 = verts[0].y, by1 = by0;
             for (const V& q : verts) {
                 bx0 = std::min(bx0, q.x);

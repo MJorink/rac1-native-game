@@ -128,6 +128,22 @@ float g_view_widen = 1.0f;
 float g_view_fov_scale = 1.0f;
 
 namespace {
+std::vector<std::pair<uint32_t, uint32_t>> g_layers;  // render_view_layer_note's ranges (the tags' addresses, inclusive)
+}  // namespace
+
+// orig: (host) see render_view.h
+void render_view_layers_begin() { g_layers.clear(); }
+void render_view_layer_note(uint32_t first, uint32_t end) {
+    if (end <= first) return;
+    if (!g_layers.empty() && g_layers.back().second + 1 == first) {  // (one layer's pieces in a row: one range)
+        g_layers.back().second = end - 1;
+        return;
+    }
+    g_layers.emplace_back(first, end - 1);
+}
+std::vector<std::pair<uint32_t, uint32_t>> render_view_layers() { return g_layers; }
+
+namespace {
 constexpr float kAspect43 = 4.0f / 3.0f;
 // the frame's shape in the window: the window's own in widescreen (view mode 2), else
 // g_view_frame_aspect (4:3, or 16:9 from Options > Graphics)

@@ -18,6 +18,8 @@ played through the game on it, and the launcher installs and updates it with a d
 - **Widescreen:** water, lava and the sand sea are cut at the sides of the widened view in fewer
   places (Gaspar's lava): the game's own on-screen test now sees the wider view. A few surfaces are
   still cut, listed in [Rendering](docs/rendering.md#widescreen-and-render-scale).
+- **Widescreen:** the Visibomb's camera view is green with scan lines across the whole screen, and
+  its out-of-range static covers the whole screen too (both stopped at the 4:3 middle).
 - The title menu's frames and the Vendor's monitors line up at any Field of View and in widescreen
   (#68).
 - Text scaled up by the modern renderer no longer shows thin lines from the neighbouring letters
