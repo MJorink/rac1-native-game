@@ -2726,6 +2726,10 @@ int main(int argc, char** argv) {
                     const bool fx_active = chain_runs && !prev_chain && !menu_mode && !fade && !fd.vendor_pic && movie_pic == nullptr && ((!title && !fd.exiting) || fd.flight);
                     if (mrp_fx_chain_ranges(fx_active, substituted, fr)) gs.set_chain_fx(std::move(fr), true);
                 }
+                // the full-screen 2D layers the last update drew (render_view_layer_note: the Visibomb's static), stretched across a
+                // widened view; not on a chain walked again (a fade's: the frame before's) or the menu's
+                if (chain_runs && !prev_chain && !menu_mode)
+                    if (auto layers = render_view_layers(); !layers.empty()) gs.set_chain_layers(std::move(layers));
                 if (chain_runs) {
                     // (the chain's tags and data captured here, its run on a worker thread: joined before the drawing, the
                     // next chain and the game's own GS transfers (libgraph); RAC1_GS_THREAD=0 or the testing modes: here)

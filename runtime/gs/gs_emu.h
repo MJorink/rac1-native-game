@@ -68,6 +68,9 @@ struct Primitive {
     // (the producer, whose projection takes the vertices back to the world), fx_id the range's id
     uint8_t fx = 0;
     uint32_t fx_id = 0;
+    // (host) kicked inside a screen layer's range (Gs::set_chain_layers): a full-screen 2D layer the game draws over its
+    // 4:3 frame, stretched across a widened view (gs_draw.cpp)
+    bool layer = false;
 };
 
 class Gs {
@@ -142,6 +145,11 @@ public:
         uint32_t id = 0;
     };
     void set_chain_fx(std::vector<FxRange> ranges, bool external);
+    // Host (a widened view): the next chain's tags at addresses in [first, last] (inclusive; the real chain's, not a
+    // substitute's) belong to a full-screen 2D layer the game draws over its whole 4:3 frame in pieces (the Visibomb's
+    // out-of-range static: a grid of 32 x 32 sprites); their primitives marked `layer`. Any order, not overlapping. Cleared by
+    // the next chain.
+    void set_chain_layers(std::vector<std::pair<uint32_t, uint32_t>> ranges);
     size_t fx_mark() const { return fx_mark_; }
     bool fx_external() const { return fx_external_; }
 
@@ -227,6 +235,8 @@ private:
     std::vector<FxRange> fx_ranges_;  // (sorted by sub then first)
     bool fx_external_ = false;
     uint8_t fx_now_ = 0;
+    std::vector<std::pair<uint32_t, uint32_t>> layer_ranges_;  // set_chain_layers (sorted by first)
+    bool layer_now_ = false;
     uint32_t fx_id_ = 0;
     size_t fx_mark_ = SIZE_MAX;
     size_t moby_mark_ = SIZE_MAX;

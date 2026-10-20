@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <exception>
+#include <iterator>
 #include <mutex>
 #include <thread>
 #include <cmath>
@@ -463,6 +464,7 @@ void Gs::vertex_kick(const Vertex& vin, bool draw) {
         if (sub_drop_) ++sub_dropped_;
         p.fx = fx_now_;
         p.fx_id = fx_id_;
+        p.layer = layer_now_;
         prims_.push_back(std::move(p));
     }
     switch (type) {
@@ -670,6 +672,12 @@ const Gs::FxRange* Gs::fx_tag(uint32_t addr, uint8_t sub) const {
     return it->sub == sub && addr >= it->first && addr <= it->last ? &*it : nullptr;
 }
 
+// (host) see gs_emu.h
+void Gs::set_chain_layers(std::vector<std::pair<uint32_t, uint32_t>> ranges) {
+    std::sort(ranges.begin(), ranges.end());
+    layer_ranges_ = std::move(ranges);
+}
+
 void Gs::set_chain_skips(std::vector<SkipRange> ranges) {
     std::sort(ranges.begin(), ranges.end(), [](const SkipRange& a, const SkipRange& b) { return a.first < b.first; });
     skip_ranges_ = std::move(ranges);
@@ -700,6 +708,8 @@ void Gs::chain_walk(uint32_t tag, uint32_t end, Mem&& mem) {
             g.skip_ranges_.clear();
             g.fx_ranges_.clear();
             g.fx_now_ = 0;
+            g.layer_ranges_.clear();
+            g.layer_now_ = false;
         }
     } clear_skips{*this};
     struct ClearSub {  // (host) the substitutes last for one chain
@@ -820,6 +830,12 @@ void Gs::chain_walk(uint32_t tag, uint32_t end, Mem&& mem) {
             fx_id_ = fr != nullptr ? fr->id : 0;
         }
         if (fx_now_ != 0 && fx_mark_ == SIZE_MAX) fx_mark_ = prims_.size();
+        layer_now_ = false;
+        if (!layer_ranges_.empty() && !in_sub) {  // (a screen layer's: the real chain's tags)
+            auto it = std::upper_bound(layer_ranges_.begin(), layer_ranges_.end(), addr,
+                                       [](uint32_t a, const std::pair<uint32_t, uint32_t>& r) { return a < r.first; });
+            layer_now_ = it != layer_ranges_.begin() && addr <= std::prev(it)->second;
+        }
         if (dry_) {
             ++skipped_tags_;
             if (!skip_started_[k]) {  // the range's VU1 program starts, once
