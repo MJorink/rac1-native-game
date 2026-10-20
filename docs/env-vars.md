@@ -93,6 +93,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_GS_TRACE` | set (any value) = on; default off | Prints, once a second, a summary of the GS packet chain (primitive count, display size, offsets) and pad presses; also forces the chain to run on the main thread. |
 | `RAC1_GS_ZTRACE` | game frame number; default off | At that frame prints the depth, scissor, test and vertex state of every GS primitive; also forces the chain to run on the main thread. |
 | `RAC1_HERO_TRACE` | set (any value) = on; default off | Prints the hero's state in the drawn scene each frame. |
+| `RAC1_HUD` | 4:3, 16:9, 21:9, 32:9 or fit; unset = Options > Graphics > HUD (4:3 in a headless run) | The HUD's width in a widened view (Options > Graphics > HUD): its left and right elements moved toward the edges of a box of that shape, never wider than the view. Needs a widened view (RAC1_VIEW_MODE=2, or the 16:9 frame). |
 | `RAC1_LIGHTS_DIR` | directory; default data/lights | Directory of the per-level user light files (levelNN.txt) loaded and saved by the in-game light editor. |
 | `RAC1_LIGHTS_JUMPS` | set (any value) = on; default off | Prints a line whenever a point light's weight changes abruptly between two frames, to find lights popping on and off. |
 | `RAC1_LIGHTS_WHITE` | set (any value) = on; default off | With the modern lighting, prints the tie classes partly textured near white (neon panels the automatic emitters do not take), their share and instance count. |

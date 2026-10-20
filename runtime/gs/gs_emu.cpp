@@ -465,6 +465,7 @@ void Gs::vertex_kick(const Vertex& vin, bool draw) {
         p.fx = fx_now_;
         p.fx_id = fx_id_;
         p.layer = layer_now_;
+        p.hud = hud_now_;
         prims_.push_back(std::move(p));
     }
     switch (type) {
@@ -678,6 +679,12 @@ void Gs::set_chain_layers(std::vector<std::pair<uint32_t, uint32_t>> ranges) {
     layer_ranges_ = std::move(ranges);
 }
 
+// (host) see gs_emu.h
+void Gs::set_chain_hud(std::vector<HudRange> ranges) {
+    std::sort(ranges.begin(), ranges.end(), [](const HudRange& a, const HudRange& b) { return a.first < b.first; });
+    hud_ranges_ = std::move(ranges);
+}
+
 void Gs::set_chain_skips(std::vector<SkipRange> ranges) {
     std::sort(ranges.begin(), ranges.end(), [](const SkipRange& a, const SkipRange& b) { return a.first < b.first; });
     skip_ranges_ = std::move(ranges);
@@ -710,6 +717,8 @@ void Gs::chain_walk(uint32_t tag, uint32_t end, Mem&& mem) {
             g.fx_now_ = 0;
             g.layer_ranges_.clear();
             g.layer_now_ = false;
+            g.hud_ranges_.clear();
+            g.hud_now_ = 0;
         }
     } clear_skips{*this};
     struct ClearSub {  // (host) the substitutes last for one chain
@@ -835,6 +844,11 @@ void Gs::chain_walk(uint32_t tag, uint32_t end, Mem&& mem) {
             auto it = std::upper_bound(layer_ranges_.begin(), layer_ranges_.end(), addr,
                                        [](uint32_t a, const std::pair<uint32_t, uint32_t>& r) { return a < r.first; });
             layer_now_ = it != layer_ranges_.begin() && addr <= std::prev(it)->second;
+        }
+        hud_now_ = 0;
+        if (!hud_ranges_.empty() && !in_sub) {  // (a HUD element's: the real chain's tags)
+            auto it = std::upper_bound(hud_ranges_.begin(), hud_ranges_.end(), addr, [](uint32_t a, const HudRange& r) { return a < r.first; });
+            if (it != hud_ranges_.begin() && addr <= std::prev(it)->last) hud_now_ = std::prev(it)->side;
         }
         if (dry_) {
             ++skipped_tags_;

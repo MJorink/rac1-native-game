@@ -20,6 +20,11 @@ played through the game on it, and the launcher installs and updates it with a d
   still cut, listed in [Rendering](docs/rendering.md#widescreen-and-render-scale).
 - **Widescreen:** the Visibomb's camera view is green with scan lines across the whole screen, and
   its out-of-range static covers the whole screen too (both stopped at the 4:3 middle).
+- **Widescreen HUD:** a new Graphics row, HUD (4:3 Original, 16:9, 21:9, 32:9, Fit Screen), spreads
+  the HUD over a wider box when the 3D is widened: the ammo, the quick select and the other elements
+  the game puts at the left move left, the bolts, the air meter and the others at the right move
+  right; health and the centred messages stay. On a 32:9 screen, 16:9 or 21:9 keeps it within a
+  glance of the middle. 4:3 Original, the default, is the original's layout.
 - The title menu's frames and the Vendor's monitors line up at any Field of View and in widescreen
   (#68).
 - Text scaled up by the modern renderer no longer shows thin lines from the neighbouring letters
