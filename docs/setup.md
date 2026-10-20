@@ -238,6 +238,10 @@ python3 tools/codegen/generate_all.py --out assets/generated --no-insn-comments
 The Windows build is made with **clang** (or GCC) from **MSYS2**, not with Visual Studio's compiler
 (see [Platforms](platforms.md)).
 
+**The simplest way is the launcher**, `rac1-launcher.exe` from the latest release: it does all of
+the steps below by itself, in a window. See [The launcher](launcher.md). What follows is the same by
+hand.
+
 1. Get the repository (with git, or as a zip) and **double-click `setup.cmd`** in its folder (or drop
    your disc image on it, or run `setup.cmd --iso "C:\Users\you\Games\ratchet.iso"`; the quotes are
    needed when the path has spaces or characters such as `&`).
@@ -316,6 +320,20 @@ Wayland or X11 development files are missing; install the packages above.
 **The movies are skipped**: FFmpeg's development files were not found when the game was built.
 Install them (the optional packages above), delete `build/CMakeCache.txt` so the build looks again,
 and run `./setup.sh`.
+
+**Windows: "error adding trust anchors" or "Problem with the SSL CA cert"** when the build downloads
+GLFW: MSYS2's certificate files are empty (#79, #69, #63). MSYS2's CLANG64 certificate tool breaks
+when the folder's path has a space in it, and leaves them empty. Since 0.4.1 `setup.cmd` (and the
+launcher) make them again with MSYS2's own tool whenever they are missing or empty: run `setup.cmd`
+again. No need to reinstall anything by hand.
+
+**Windows: "Fatal Python error" while generating the code** (#72): Python itself crashed in one of
+the parallel jobs, not the generator. Since 0.4.1 a unit that crashes is run once more on its own;
+if it still fails, run `setup.cmd -j 1` (or, in the launcher, Settings > Parallel jobs > 1).
+
+**Windows: "... rac1-native.exe is missing after the build, although the build finished"**: an
+antivirus (Windows Security too) removed the newly built program, which it does not know. Look in
+its protection history, allow the file (or exclude the game's folder), and run the setup again.
 
 **A gamepad is not recognised**: see [Input](input.md#how-the-host-builds-the-packet) to add its
 mapping. Gamepads can be connected while the game runs.

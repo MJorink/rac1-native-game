@@ -1,0 +1,110 @@
+# The launchers (tools/launcher/, docs/launcher.md): built at each push, and attached to each release, the one file
+# players download (and which updates itself from the latest release's):
+#   rac1-launcher.exe         Windows (.NET Framework 4.8, tools/launcher/windows/)
+#   rac1-launcher-linux-x64   Linux (.NET 8 and Avalonia in the file, tools/launcher/linux/)
+# Their version is the release's (project(... VERSION) in CMakeLists.txt). Each is started once (a smoke test: a
+# launcher that cannot open its window, e.g. a library missing from the Linux file, fails here, not on a player's PC).
+name: launcher
+
+on:
+  push:
+    paths:
+      - "tools/launcher/**"
+      - ".github/workflows/launcher.yml"
+  pull_request:
+    paths:
+      - "tools/launcher/**"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows (rac1-launcher.exe)
+    runs-on: windows-2022
+    permissions:
+      contents: write  # (gh release upload, on a release)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $m = Select-String -Path CMakeLists.txt -Pattern 'project\(\s*rac1-native\s+VERSION\s+(\d+\.\d+\.\d+)'
+          "version=$($m.Matches[0].Groups[1].Value)" >> $env:GITHUB_OUTPUT
+      - name: Build
+        run: dotnet build tools/launcher/windows/Launcher.csproj -c Release -p:LauncherVersion=${{ steps.version.outputs.version }} -o out
+      - name: Smoke test (it starts, and is still open 20 seconds later)
+        shell: pwsh
+        run: |
+          $p = Start-Process out/rac1-launcher.exe -PassThru
+          Start-Sleep 20
+          if ($p.HasExited) { throw "the launcher closed by itself (exit code $($p.ExitCode))" }
+          "running: $($p.MainWindowTitle)"
+          Stop-Process $p
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rac1-launcher-windows
+          path: out/rac1-launcher.exe
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" out/rac1-launcher.exe --clobber
+
+  linux:
+    name: Linux (rac1-launcher-linux-x64)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Version
+        id: version
+        run: echo "version=$(grep -oP 'project\(\s*rac1-native\s+VERSION\s+\K[0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+      - name: Build
+        run: |
+          dotnet publish tools/launcher/linux/Launcher.Linux.csproj -c Release -p:LauncherVersion=${{ steps.version.outputs.version }} -o out
+          mv out/rac1-launcher out/rac1-launcher-linux-x64
+          chmod +x out/rac1-launcher-linux-x64
+      - name: Smoke test (it starts on an X display, and is still open 20 seconds later)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb imagemagick libice6 libsm6 libfontconfig1
+          Xvfb :99 -screen 0 1280x800x24 &
+          export DISPLAY=:99
+          sleep 2
+          out/rac1-launcher-linux-x64 > launcher.log 2>&1 &
+          pid=$!
+          sleep 20
+          import -window root launcher-linux.png
+          if ! kill -0 "$pid" 2>/dev/null; then
+            cat launcher.log
+            echo "::error::the launcher closed by itself"
+            exit 1
+          fi
+          kill "$pid"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rac1-launcher-linux
+          path: out/rac1-launcher-linux-x64
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rac1-launcher-linux-screenshot
+          path: launcher-linux.png
+          if-no-files-found: ignore
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" out/rac1-launcher-linux-x64 --clobber

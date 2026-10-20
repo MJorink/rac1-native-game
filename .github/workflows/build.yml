@@ -50,7 +50,7 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DRAC1_NO_GENERATED=ON
       - name: Build
-        run: cmake --build build -j 4 -k 0
+        run: cmake --build build -j 4 -- -k 0
 
   windows:
     name: Windows (MSYS2 CLANG64, clang)

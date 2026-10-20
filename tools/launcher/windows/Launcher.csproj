@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The launcher for Windows (README.md, docs/launcher.md): one .exe, for .NET Framework 4.8, which every
+       Windows 10 and 11 has, so there is nothing to install. Built with `dotnet build -c Release` (any .NET SDK,
+       6 or newer); -p:LauncherVersion=x.y.z sets its version (the CI passes the release's). Its window is here, what
+       it does is in ../core/ (shared with the Linux launcher, ../linux/). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>rac1-launcher</AssemblyName>
+    <RootNamespace>Rac1Launcher</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>launcher.ico</ApplicationIcon>
+    <LauncherVersion Condition="'$(LauncherVersion)' == ''">0.0.0</LauncherVersion>
+    <Version>$(LauncherVersion)</Version>
+    <Product>rac1-native launcher</Product>
+    <Description>Installs, sets up, updates and starts rac1-native</Description>
+    <Copyright>rac1-native contributors, MIT license</Copyright>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- (no .exe.config beside it: the one .exe is all there is) -->
+    <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+    <DebugType>none</DebugType>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <DefineConstants>$(DefineConstants);WINDOWS_LAUNCHER</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../core/*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="Microsoft.VisualBasic" />
+    <EmbeddedResource Include="launcher.ico" LogicalName="launcher.ico" />
+  </ItemGroup>
+</Project>

@@ -3,6 +3,32 @@
 What changed in each release. Releases are source only: you build the game with `./setup.sh`
 (`setup.cmd` on Windows) from your own disc. Issue numbers refer to this repository's issues.
 
+## Unreleased
+
+### The launcher (Windows and Linux)
+- **The launcher**: one file to download and open, attached to each release, `rac1-launcher.exe`
+  for Windows and `rac1-launcher-linux-x64` for Linux. It downloads the game, sets it up from your
+  disc image, updates it (and itself), starts it, and backs up, restores and deletes saves. It
+  follows the update channel (stable releases, or development: `main`), the same setting as the
+  game's own. On Linux it offers to install the packages the build needs (your desktop asks for your
+  password). When the game closes right after starting, it shows why. See
+  [The launcher](docs/launcher.md).
+
+### Windows
+- The game no longer drops `RAC1_PYTHON`, which the setup sets for the game's setup mode.
+
+### Updating (`--update`, all systems)
+- An update from the source zip leaves the files the new version does not change as they are: the
+  build then recompiles only what changed, instead of the whole game at every update (an update
+  with nothing new took 6 minutes on a 20-thread PC, now a few seconds).
+- An update stopped before it changes anything (no network, local changes) no longer leaves its
+  backups behind (a copy of the program, about 350 MB, and of the generated code).
+- The setup no longer fails downloading GLFW with "error adding trust anchors" when the game's
+  folder has a space in its path (#79, #69, #63): MSYS2's certificate files, left empty by its
+  CLANG64 tool there, are made again by `tools\windows\toolchain.ps1` (also on a setup made before).
+- A code generation job whose Python crashes ("Fatal Python error", #72) is run once more on its own.
+- A clearer message when the program disappears after the build (an antivirus removing it, #69).
+
 ## 0.4.0
 
 Bug fixes from the 0.3.0 reports, and almost all of the game's code is now ported: of the code the

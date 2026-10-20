@@ -162,14 +162,25 @@ def main():
         root = os.path.join(tmpbase, 'root')
     t0 = time.time()
     failed = []
+    crashed = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
         futs = [ex.submit(run_unit, u, root, strip, tmpbase) for u in sel]
         for f in concurrent.futures.as_completed(futs):
             unit, rc, dt, err = f.result()
+            crashed[unit] = rc < 0 or rc >= 0xC0000000 or 'Fatal Python error' in err
             print('%-34s %s %6.1f s' % (unit, 'ok  ' if rc == 0 else 'FAIL', dt), flush=True)
             if rc:
                 failed.append(unit)
                 print('   ' + err.replace('\n', '\n   '))
+    # A unit whose Python crashed (an exit code from a Windows exception, 0xC0000000 and up: "Fatal Python error"
+    # from CPython 3.14's interpreter, GitHub issue #72) is run once more, alone: the crash is not the generator's
+    for unit in [u for u in failed if crashed.get(u)]:
+        unit, rc, dt, err = run_unit(unit, root, strip, tmpbase)
+        print('%-34s %s %6.1f s (run again)' % (unit, 'ok  ' if rc == 0 else 'FAIL', dt), flush=True)
+        if rc == 0:
+            failed.remove(unit)
+        else:
+            print('   ' + err.replace('\n', '\n   '))
     nfiles = sum(len(us[u]) for u in sel)
     print('%d units, %d files, %.1f s%s' % (len(sel), nfiles, time.time() - t0, '' if not failed else ', FAILED: ' + ' '.join(failed)))
     rc = 1 if failed else 0
