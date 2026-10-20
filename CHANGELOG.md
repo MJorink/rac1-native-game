@@ -50,9 +50,9 @@ played through the game on it, and the launcher installs and updates it with a d
   Novalis's neon tubes and hanging bulbs, Kerwan's street lamps, Oltanis's plaza lamps. A lamp can
   be aimed down (a pool of light on the floor under it): Novalis's neons now light the floor and the
   walls below them, which a flat plate under the yellow press had put in its shadow, and were too weak.
-- **Sun Rays** (Options > Graphics: Off, Low, High): shafts of light where the sun shines through
-  an opening (a tunnel's mouth, between trees or buildings); an open sky around the sun gives none.
-  About 0.45 ms of GPU at 5053 x 1371 with rays showing, almost nothing otherwise.
+- **Sun Rays** (Options > Graphics: Off, Low, Medium, High): shafts of light from the sun where the
+  sky shows through the scene. Medium is the earlier Low, High the earlier High at a finer
+  resolution, Low a cheaper Medium (settings and saves with Low read as Medium, High as High).
 - **Ambient Occlusion** has six values (Off, SSAO, SSAO+, HBAO, GTAO, GTAO at half resolution), and
   each mode is now visible and different (#75).
 - **AO Intensity** (Options > Graphics, 25 to 125 %, default 75 %): how dark the ambient occlusion
