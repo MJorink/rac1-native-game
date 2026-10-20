@@ -66,27 +66,38 @@ to build and play, plus the documentation.
 **The rest of the game is ported (0.3.0):** levels 8 to 18, up to the final fight, the credits and
 the end menu. **0.4.0** was a round of fixes for the bugs reported on 0.3.0, and the
 [Port inventory](port-inventory.md): every function of the disc's code sorted into ported, left to
-port and never reached, and the code it found left to port, ported (one function remains). What
-comes next, in no fixed order:
+port and never reached, and the code it found left to port, ported (one function remains).
+
+**Since 0.4.0** (on `main`, for the next release; see the [Changelog](../CHANGELOG.md#unreleased)):
+the launcher for Windows and Linux, which installs, updates and starts the game and manages the
+saves; the modern lighting reworked (the level's own sun, interiors, Shadow Strength, lights per
+object class, sun rays, six ambient occlusion modes); the sound driver closer to the PS2's, with 5.1
+and 7.1 output; the full frame always shown; fixes from the reports. The repository moved to the
+[RAC-Native](https://github.com/RAC-Native) organization.
+
+What comes next, in no fixed order:
 
 - **Playtesting and polishing** the planets after Orxon, and the fixes that come from it.
+- **A widescreen HUD**, laid out to use the extra width (see [Enhancements](enhancements.md#picture)).
+- **ARM64 and Android:** the port is in progress on the `port/android` branch (#78); the CI has a Linux
+  ARM64 job, not blocking yet.
 - **The last items of the inventory:** the one function left, and, as optional enhancements, the
   cut content and development features it lists (see [Port inventory](port-inventory.md)).
 - **The renderer:** the HUD, menus and remaining effects drawn natively, the mobys' shadow meshes.
-- **Testing on more machines:** the European PAL disc, and Windows.
+- **Testing on more machines:** the European PAL disc, and Windows (now also through the launcher).
 
 Ideas for later, from the project's list of [enhancements](enhancements.md) (each one optional and
 off by default when it changes the game):
 
-- a widescreen HUD, laid out to use the extra width;
 - higher frame rates by interpolating between the game's 60 Hz frames (the game's logic stays at
   60 Hz);
 - HD textures, generated on the player's own machine from their own disc, never distributed;
 - post-processing effects;
 - a language switch with all the languages on the disc;
 - optional revival of content the game carries but never shows;
-- Windows and macOS builds (the plan: [Platforms](platforms.md));
-- the PAL release (50 Hz timing, different addresses), only once the NTSC-U version is complete;
+- macOS builds, and Windows beyond experimental (the plan: [Platforms](platforms.md));
+- the PAL release's 50 Hz mode (the PAL disc already runs, in its 60 Hz mode), once the NTSC-U
+  version is complete;
 - other graphics backends (Vulkan, Metal) behind the renderer's interface.
 
 ## Not goals

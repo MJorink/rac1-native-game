@@ -10,7 +10,9 @@ Blarg / Nebula G34 and Umbris; see [Roadmap](roadmap.md)); Batalia, Gaspar and O
 the game runs, one function is left to port (see the [Port inventory](port-inventory.md)). The
 whole game has been played through to the end on 0.4.0 (Linux), and the start of a New Game+
 checked; the planets after Orxon have had one full playthrough so far, so expect some bugs and
-glitches there; the port as a whole still needs polishing.
+glitches there; the port as a whole still needs polishing. Since 0.4.0, `main` has gained the
+launcher for Windows and Linux, a reworked modern lighting, 5.1 / 7.1 sound and more fixes (see the
+[Changelog](../CHANGELOG.md#unreleased)).
 
 Every planet of the milestone has its own classes ported and proved against the original code, and
 runs on its own overlay. The gaps that remain on them are listed below as **known issues**; they are
@@ -109,12 +111,13 @@ nothing, so an object whose class is not ported stands still or does not appear.
 | Quit Game (the pause menu's Options): back to the title screen and its main menu, as the original (the boot module read back from the disc, without the intro movie) | Ported; playtested. |
 | Memory card, save and load, the save on planet change | Works, but may still change: the save files' format, location and size have not been checked by hand yet. See [Saves](saves.md). |
 | Pause menu (with its 3D models), HUD, Vendor, the ship's planet menu, the loading screen's flight | Ported. Known issue: the planet menu's information panels draw empty. |
-| Sound and music (989snd), dialogue streams, movies | Working; see [Audio](audio.md). The sound mirror that keeps music playing through loads is still a proposal (see [Decisions](decisions.md#13-the-iops-sound-runs-twice)). |
+| Sound and music (989snd), dialogue streams, movies; 5.1 and 7.1 output | Working; see [Audio](audio.md). The sound mirror that keeps music playing through loads is still a proposal (see [Decisions](decisions.md#13-the-iops-sound-runs-twice)). |
 | 3D rendering (the MRP) | The default renderer; see [Rendering](rendering.md). |
 | Modern lighting (optional) | Working, off by default; see [Lighting](lighting.md). |
 | Options > Graphics (including Texture Detail), Controls, Advanced; the Original / Modern / Experimental choice at New Game | Implemented, known issues may remain; see [Settings](settings.md). |
 | Keyboard, mouse and controller mapping, remapping in Options > Controls | Implemented, known issues may remain; see [Input](input.md). |
 | Debug tools behind `--debug-tools` | Implemented; see [Settings](settings.md#debug-tools). |
+| The launcher (Windows and Linux x86-64): install, update, play, saves | New since 0.4.0; see [The launcher](launcher.md). |
 
 ## Not done yet
 
@@ -131,7 +134,11 @@ nothing, so an object whose class is not ported stands still or does not appear.
 - **Not everything is native in the renderer.** The HUD, menus and some effects are still drawn
   through the GS replica, and the mobys' flattened shadow meshes are not drawn yet (see
   [Rendering](rendering.md#limits)).
-- **Platforms.** Linux x86-64; Windows x86-64 is experimental (see [Platforms](platforms.md)). Vulkan / Direct3D renderers and macOS may come later.
+- **A widescreen HUD.** In widescreen the HUD and the menus stay 4:3 in the middle of the screen;
+  a HUD laid out for the extra width is planned (see [Enhancements](enhancements.md#picture)).
+- **Platforms.** Linux x86-64; Windows x86-64 is experimental (see [Platforms](platforms.md)). A port
+  to ARM64 and Android is in progress on the `port/android` branch (#78); the CI has a Linux ARM64
+  job, not blocking yet. Vulkan / Direct3D renderers and macOS may come later.
 - **Regions.** The North American disc (`SCUS-97199`) is the reference. The European PAL disc
   (`SCES-50916`) can now be used on its own, through its region table: the setup, the generated code
   and the game run from it, in the PAL game's 60 Hz mode. This is new and awaits playtesting. Still to

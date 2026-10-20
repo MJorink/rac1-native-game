@@ -57,10 +57,19 @@ See [Settings](settings.md#graphics) and [Rendering](rendering.md).
 
 See [Lighting](lighting.md). Off by default (Lighting: Original).
 
-- The sun's shadows, cast and received by the world and the objects.
+- The sun's shadows, cast and received by the world and the objects, with a Shadow Strength
+  setting; the world lit by the sun, which a level's own file can turn.
 - The game's own dynamic lights (explosions, weapons) lit per pixel, and light emitters found
-  automatically in the levels' glowing textures (lamps, panels, floor strips), with their shadows.
-- Ambient occlusion.
+  automatically in the levels' glowing textures (lamps, panels, floor strips), with their shadows;
+  a level's file can also make every object of a class a light (street lamps, neon tubes).
+- Sun rays: shafts of light from the sun through openings.
+- Ambient occlusion, in five modes (SSAO, SSAO+, HBAO, GTAO, GTAO at half resolution).
+
+### Sound: 5.1 and 7.1
+
+Options > Sound's Mono / Stereo row also offers 5.1 and 7.1: the world's sounds come from their
+direction, the dialogue from the centre. The game itself still plays in Stereo. See
+[Settings](settings.md#sound-51-and-71).
 
 ### Original, Modern or Experimental mode
 
@@ -100,4 +109,5 @@ In no fixed order. Each one is optional, and off by default if it changes the ga
 ### Platforms
 
 - **Windows and macOS builds**, and other graphics back ends behind the renderer.
+- **ARM64 and Android**: in progress (#78); the CI has a Linux ARM64 job, not blocking yet.
 - **Other releases of the game** (such as the European one) once the North American one is complete.

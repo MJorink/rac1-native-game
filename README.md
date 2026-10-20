@@ -7,6 +7,8 @@
 > game has been played through to the end** on 0.4.0, and the start of a New Game+ checked; the
 > second half has had one full playthrough so far, so expect some bugs and glitches. So far it has
 > been tested on Linux only (Windows is experimental).
+> Since 0.4.0, `main` has gained a launcher for Windows and Linux, a reworked modern lighting,
+> 5.1 / 7.1 sound and more fixes: see the [Changelog](CHANGELOG.md#unreleased).
 > See [Status](docs/status.md).
 
 A native PC port of **Ratchet & Clank** (PlayStation 2, 2002), for Linux, and experimentally for Windows.
@@ -60,10 +62,10 @@ only Windows shows can't be excluded. Linux remains the reference. Reports are w
 The optional modern lighting (sun shadows, per-pixel lights, ambient occlusion) is **EXPERIMENTAL**.
 It is off by default, and with it off the picture is the original's lighting, unchanged. It is not
 yet fully usable on some planets: Nebula G34 (Blarg's station) is still a mess, with some zones
-pitch dark. That is not a porting priority and will be dealt with later. Levels up to Umbris run
-with it, with varying results. The sun is the light the game itself lights Ratchet with in his
-current zone; the glowing objects are found automatically. See [Lighting](docs/lighting.md), which
-lists how well it works on each level.
+pitch dark. That is not a porting priority and will be dealt with later. Every level runs with it,
+with varying results. The sun is the light the game itself lights Ratchet with in his current zone,
+turned by the level's own file where needed; the glowing objects are found automatically. See
+[Lighting](docs/lighting.md), which lists how well it works on each level.
 
 ## Why C++ and OpenGL
 
@@ -85,13 +87,13 @@ follows from that.
   included, and it runs on every desktop GPU and Linux driver in use. The renderer is kept apart
   from the game code, so another graphics API can be added later if there is a reason for it.
 - **Other platforms and graphics APIs, later.** Vulkan and Direct3D renderers may come in the future,
-  next to OpenGL, and with them Windows. The code is portable C++, but other devices need more than
+  next to OpenGL. The code is portable C++, but other devices need more than
   a renderer:
   - **Graphics API.** Phones and handhelds speak OpenGL ES or their own APIs, not desktop OpenGL 4.6.
   - **Processor.** The game's memory is little-endian, like the PS2 and the PC.
   - **Memory and speed.** The device must have enough of both.
 
-  Each port to another device is its own project.
+  Each port to another device is its own project. A port to ARM64 (Android) is in progress (#78).
 - **Every choice is written down.** The big decisions, and the ones we reversed, are explained in
   [Decisions](docs/decisions.md) and [History](docs/history.md).
 
@@ -113,8 +115,17 @@ follows from that.
 
 ## Quick start
 
-You need Linux (or Windows, [experimental](#windows-support-is-experimental)), a GPU with OpenGL 4.6, and your
-ISO of the game (the North American or the European PAL disc).
+You need Linux (or Windows, [experimental](#windows-support-is-experimental)), a GPU with OpenGL 4.6,
+and your ISO of the game (the North American or the European PAL disc).
+
+**The easiest way, on Windows and Linux, is the launcher**: download `rac1-launcher.exe` (Windows) or
+`rac1-launcher-linux-x64` (Linux, x86-64) from the
+[latest release](https://github.com/RAC-Native/rac1-native-game/releases/latest), open it, click
+**Install** and choose your disc image. It downloads the game, builds it from your disc, keeps it up
+to date and manages your saves: see [The launcher](docs/launcher.md). (The launcher is attached to the releases
+from the next one on; 0.4.0 does not have it yet: until then, use the steps below.)
+
+By hand, on Linux:
 
 ```bash
 git clone https://github.com/RAC-Native/rac1-native-game.git
@@ -129,14 +140,9 @@ game's code from it, builds the game and generates the game's data. Run it again
 ./build/rac1-native
 ```
 
-The full guide, with requirements and troubleshooting: [Setup](docs/setup.md).
-**The easiest way, on Windows and Linux, is the launcher**: download `rac1-launcher.exe` (Windows) or
-`rac1-launcher-linux-x64` (Linux) from the
-[latest release](https://github.com/RAC-Native/rac1-native-game/releases/latest), open it, click
-**Install** and choose your disc image. It downloads the game, builds it, keeps it up to date and
-manages your saves: see [The launcher](docs/launcher.md). On Windows without the launcher, run
-`setup.cmd` from the repository's folder, then play with `play.cmd`: see
-[Setup](docs/setup.md#on-windows-experimental). Windows support is experimental.
+The full guide, with requirements and troubleshooting: [Setup](docs/setup.md). On Windows without
+the launcher, run `setup.cmd` from the repository's folder, then play with `play.cmd`: see
+[Setup](docs/setup.md#on-windows-experimental).
 
 At start the game checks, in the background, whether a newer version is out, and says so at the main menu
 (it downloads nothing; this is new and still a work in progress). That is one anonymous request to GitHub's API, no telemetry; Options > Advanced >

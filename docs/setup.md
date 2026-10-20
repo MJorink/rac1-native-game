@@ -2,6 +2,10 @@
 
 From a fresh clone and your own disc image to the game running.
 
+> **The easy way, on Windows and Linux (x86-64), is the launcher**: one file from the latest release
+> that downloads the game and does every step below by itself, in a window. See
+> [The launcher](launcher.md). This page is the same by hand.
+
 This repository contains none of the game's code or data. Everything the game needs is extracted
 and generated from your own disc, on your machine: the game's data, and also part of the port's
 source code, the files that are a mechanical translation of the game's own code (see

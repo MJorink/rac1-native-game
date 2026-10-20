@@ -142,6 +142,12 @@ it found left to port was ported, Quit Game back to the title screen among it, u
 remained (0.4.0). Then the whole game was played through by hand to the end, for the first time on
 the port, and the start of a New Game+ checked.
 
+**19 to 20 October: after 0.4.0.** The launcher for Windows and Linux, which installs, updates and
+starts the game from one file; the modern lighting reworked around the level's own sun; the sound
+driver brought closer to the PS2's, with 5.1 and 7.1 output; an ARM64 job in the CI, not blocking
+yet. On 20 October the repository moved from Daino's own GitHub account to the
+[RAC-Native](https://github.com/RAC-Native) organization; the old address redirects.
+
 ## What came of it
 
 - Five months of trying became one rule: nothing is invented, and every port is checked against the

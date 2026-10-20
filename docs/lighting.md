@@ -1,7 +1,7 @@
 # Lighting
 
 The game's own lighting, how the MRP reproduces it, and the optional modern lighting on top of it:
-point lights per pixel, cascaded sun shadows, ambient occlusion and an in-game light editor.
+point lights per pixel, cascaded sun shadows, sun rays, ambient occlusion and an in-game light editor.
 
 > **The modern lighting is EXPERIMENTAL.** It is off by default and will stay off by default.
 > It is not yet fully usable on some planets, and it is not a porting priority: it will be
@@ -41,8 +41,11 @@ differs a lot between planets. Where each part comes from is described in
   our own heuristic, not game data, and it can be wrong (see the table below).
 - **Lights placed by hand** with the [light editor](#the-light-editor) cover what the automatic
   search can't find. The project ships no hand-placed lights; its level files only turn off an
-  automatic class the search got wrong (Gaspar, Orxon) or turn the sun (Novalis, Kerwan, Eudora,
-  Oltanis, Quartu).
+  automatic class the search got wrong (Gaspar, Orxon), turn the sun (Novalis, Kerwan, Eudora,
+  Oltanis, Quartu), mark interiors (Blarg, Orxon), or make every object of a class a light
+  (Novalis's neon tubes and hanging bulbs, Kerwan's street lamps, Oltanis's plaza lamps).
+- **Sun rays** (Options > Graphics, Off by default): shafts of light from the sun through openings
+  ([Sun rays](#sun-rays)).
 
 **State per level** (what the project's own surveys found, with the lighting set to Medium,
 point-light shadows and ambient occlusion on; levels 8 to 18 also at Low and High). "Works" means
@@ -56,7 +59,7 @@ seen, and every one of them still needs a playtest.
 | Veldin | Works. A low, warm sun outdoors; the lighting follows Ratchet into his house (a different light set). Glowing panels are found. |
 | Novalis | Works. Sun checked against the level's look. Few automatic lights. |
 | Aridia | Works. |
-| Kerwan | Works. Few automatic lights. |
+| Kerwan | Works. Few automatic lights; the street lamps (moby class 1827) are lights from the level's file. The sun comes low through the first tunnel's mouth, the city backlit. |
 | Eudora | Works. The heaviest level for the lighting (its forest has many shadow casters; roughly twice the frame time of the lighting off in the survey, on an integrated GPU). Trees and woodwork glow bright orange in the textures: they are recognised as materials and not turned into lights. Need some works. |
 | Rilgar | Works. Same warm-material handling as Eudora. Needs some works, some automatic lights are a bit non-sense |
 | Blarg (Nebula G34, Blarg's station) | **Still a mess, possibly better.** Playtesting found some zones pitch dark: the station's closed zones are lit by a light that reaches the floor only through the geometry above it, so the sun's shadow covered the whole zone. Closed zones are marked [interiors](#interiors) in `data/lights/level06.txt` (light set 6 so far, a closed room the old covered-view check found); the lounges with large windows keep their shadows. Other closed zones: to mark while playing. The hangar has only a faint, low blue sun. |
@@ -67,7 +70,7 @@ seen, and every one of them still needs a playtest.
 | Pokitaru | Works (sun at 30 degrees): shadows on the boardwalks at the start. No automatic lights are found on this level. |
 | Hoven | Works outdoors on the snow (sun at 30 degrees). A few blue panels inside give 16 small lights. |
 | Gemlik Base | Works: a moon base in space, lit from the side (20 degrees), with long shadows. Ratchet in a shadow is almost black: the level's light without its key light is nearly nothing (the game's own formula, see [How a shadow darkens](#sun-shadows-cascaded-shadow-maps)). |
-| Oltanis | **Needs Daino's eye.** The key light is dim and grey, yet it is the brightest of its set, so its shadows are full; the streets between the tall buildings are mostly in shadow and Ratchet is dark there. Where almost the whole view is shaded the sun fades out (the view covered), so the shadows come and go as the camera turns toward or away from the lit plazas. The street lamps are mobys, which give no automatic lights; the level's 137 are beacons on top of the towers, high above the streets. |
+| Oltanis | **Needs Daino's eye.** The key light is dim and grey, yet it is the brightest of its set, so its shadows are full; the streets between the tall buildings are mostly in shadow and Ratchet is dark there. Where almost the whole view is shaded the sun fades out (the view covered), so the shadows come and go as the camera turns toward or away from the lit plazas. The street lamps are mobys, which give no automatic lights (the level's 137 are beacons on top of the towers, high above the streets); the level's file makes them lights (moby class 1511). |
 | Quartu | **Needs Daino's eye.** The factory at night: the courtyards' walls shade most of the view, so the sun is often faded out (the original's look) and comes back, with dark courtyards, when the camera sees the lit ground or the sky. 7 small lights. |
 | Kalebo III | Works: the city on its platforms in the sun (30 degrees) with clean shadows. 85 automatic lights (cyan strips of tie class 2157), away from the start. |
 | Drek's fleet | Works as the original indoors: the ships' halls and corridors are covered from the sun (none of the view sees it), so the picture is the original's with the occlusion on top. The sun is the zone's second light (the first comes from below). The orange door trims (tie class 2154, warm, 14 % of the class: just under the material share) give 10 faint lights: borderline. |
@@ -75,6 +78,10 @@ seen, and every one of them still needs a playtest.
 
 Until a planet has had a playtest with the modern lighting, it may look wrong there: shadows from a
 doubtful sun, a zone far too dark, or lamps that cast no light.
+
+The rows that speak of a view covered from the sun, or of the sun fading out, were written with the
+[covered views' probe](#views-covered-from-the-sun-off-testing) on. It is now off by default: the sun
+stays on there unless the place is marked an [interior](#interiors). Those rows await a new survey.
 
 This page assumes the renderer described in [Rendering](rendering.md). Code paths are under
 `src/game/render/` unless stated.
@@ -513,7 +520,7 @@ light from the sun's direction is put back, times the sun's visibility. `strengt
 Strength option (50 to 100 %, default 70 %): the share of the sun's light a shadow hides, the same
 for every shadow (no tiers); the rest stands for the sky's light in the shade. The mobys' shadows
 use the same strength. `n` is the face normal,
-`w` the sun's weight (the zone's, faded in a [covered view](#views-covered-from-the-sun): at 0 the
+`w` the sun's weight (the zone's, faded in a [covered view](#views-covered-from-the-sun-off-testing): at 0 the
 colour is the game's). The painted base and the fill are kept: the base is the ambient. With the
 sun where the game has it, a point in the sun keeps its colour and a point in shadow loses the key
 light's term; with the sun turned (the level's own sun), the lit sides turn with it. No strength

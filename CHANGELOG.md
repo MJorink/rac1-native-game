@@ -5,7 +5,58 @@ What changed in each release. Releases are source only: you build the game with 
 
 ## Unreleased
 
-### The launcher (Windows and Linux)
+What `main` has since 0.4.0, for the next release. The project moved to the
+[RAC-Native](https://github.com/RAC-Native) organization on GitHub:
+<https://github.com/RAC-Native/rac1-native-game> (the old address redirects). The updater, the
+update check and the launcher use the new address.
+
+### Graphics
+- **The full frame, always:** the Overscan row is removed. The thin slivers the game itself leaves
+  at the frame's edge as a HUD element slides away (the Suck Cannon's gauge, the air meter), which a
+  TV hid, are not drawn. Older settings and saves with the row load fine.
+- **Widescreen:** water, lava and the sand sea are cut at the sides of the widened view in fewer
+  places (Gaspar's lava): the game's own on-screen test now sees the wider view. A few surfaces are
+  still cut, listed in [Rendering](docs/rendering.md#widescreen-and-render-scale).
+- The title menu's frames and the Vendor's monitors line up at any Field of View and in widescreen
+  (#68).
+- Text scaled up by the modern renderer no longer shows thin lines from the neighbouring letters
+  (#76).
+- Faster: the Gadgetron Vendor's screens and some of the GPU work; no more hitch when the pause
+  menu opens.
+
+### Lighting (the optional modern lighting, still experimental)
+- **Shadows without tiers:** a point is lit or in shadow, whatever blocks the sun, near or far;
+  overlapping shadows no longer add up or cancel.
+- **The level's own sun:** a level's file can turn the sun where the game's direction leaves whole
+  areas in the shade (Novalis, Kerwan, Eudora, Oltanis, Quartu); the debug menu's Sun tab edits it
+  live. Kerwan's sun now comes low through the first tunnel's mouth, the city backlit.
+- **The world lit by our sun:** the baked key light is taken off the world and the mobys and put
+  back from the sun, times its shadow, so lit and shaded ground follow the same sun.
+- The original's drop shadows are no longer drawn with the lighting on.
+- **Interiors** come from the level files (Orxon's base's first rooms, a closed room on Blarg): the
+  sun turns off there with a short fade. The old check of how much of the view sees the sun is off
+  by default.
+- **Shadow Strength** (Options > Graphics, 50 to 100 %, default 70 %): how much of the sun a shadow
+  hides.
+- **Lights per object class:** every object of a class can be a light, from the level's file:
+  Novalis's neon tubes and hanging bulbs, Kerwan's street lamps, Oltanis's plaza lamps.
+- **Sun Rays** (Options > Graphics: Off, Low, High): shafts of light from the sun through openings.
+- **Ambient Occlusion** has six values (Off, SSAO, SSAO+, HBAO, GTAO, GTAO at half resolution), and
+  each mode is now visible and different (#75).
+
+With Lighting on Original (the default) the picture is unchanged.
+
+### Audio
+- The game's sound is no longer 6 dB quieter than the movies: the master volume is read as the
+  original's sound driver reads it (#21).
+- The sound driver closer to the PS2's: an SPU2-style reverb, the original's autopan, the voices
+  summed in 32 bits, fixes to the ADPCM decoding, and volume changes ramped so they do not click.
+- The reverb routed as on the PS2 (#86).
+- **5.1 and 7.1 output:** Options > Sound's last row steps Mono, Stereo, 5.1 and 7.1. The world's
+  sounds come from their direction, the dialogue from the centre. See
+  [Settings](docs/settings.md#sound-51-and-71).
+
+### Launcher and setup
 - **The launcher**: one file to download and open, attached to each release, `rac1-launcher.exe`
   for Windows and `rac1-launcher-linux-x64` for Linux. It downloads the game, sets it up from your
   disc image, updates it (and itself), starts it, and backs up, restores and deletes saves. It
@@ -13,21 +64,25 @@ What changed in each release. Releases are source only: you build the game with 
   game's own. On Linux it offers to install the packages the build needs (your desktop asks for your
   password). When the game closes right after starting, it shows why. See
   [The launcher](docs/launcher.md).
-
-### Windows
-- The game no longer drops `RAC1_PYTHON`, which the setup sets for the game's setup mode.
-
-### Updating (`--update`, all systems)
+- Windows: the game no longer drops `RAC1_PYTHON`, which the setup sets for the game's setup mode.
 - An update from the source zip leaves the files the new version does not change as they are: the
   build then recompiles only what changed, instead of the whole game at every update (an update
   with nothing new took 6 minutes on a 20-thread PC, now a few seconds).
 - An update stopped before it changes anything (no network, local changes) no longer leaves its
   backups behind (a copy of the program, about 350 MB, and of the generated code).
-- The setup no longer fails downloading GLFW with "error adding trust anchors" when the game's
+- Windows: the setup no longer fails downloading GLFW with "error adding trust anchors" when the game's
   folder has a space in its path (#79, #69, #63): MSYS2's certificate files, left empty by its
   CLANG64 tool there, are made again by `tools\windows\toolchain.ps1` (also on a setup made before).
 - A code generation job whose Python crashes ("Fatal Python error", #72) is run once more on its own.
 - A clearer message when the program disappears after the build (an antivirus removing it, #69).
+
+### Fixes
+- Pre-rendered movies no longer add to the time played, as on the PS2 (#24).
+- The Controls page: a mouse movement no longer rebinds the D-pad, only the sticks, as the page's
+  help says (#61).
+
+### Building
+- The CI also builds on Linux ARM64. It does not block yet: the ARM64 port is in progress (#78).
 
 ## 0.4.0
 

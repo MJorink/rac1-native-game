@@ -130,4 +130,6 @@ The code is portable C++, but a device needs more than a renderer:
 - a little-endian processor, because the game's memory is little-endian like the PS2's;
 - enough memory and speed.
 
-Each such port is its own project.
+Each such port is its own project. The first, to ARM64 and Android, is in progress on the
+`port/android` branch (#78); the CI's Linux ARM64 build does not pass yet (parts of the PS2 layer
+still use x86 instructions), so it does not block.
