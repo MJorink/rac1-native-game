@@ -140,6 +140,7 @@
 #include <_devtools/item_give_quiet.h>  // (header only: also without the dev tools)
 #ifdef RAC1_DEVTOOLS
 #include <_devtools/dev_menu.h>
+#include <_devtools/dev_unlocks.h>
 #endif
 
 using namespace rac1;
@@ -2757,6 +2758,9 @@ int main(int argc, char** argv) {
                     q = *e == ',' ? e + 1 : e;
                 }
             }
+#ifdef RAC1_DEVTOOLS
+            devtools::unlocks_testing(frame);  // testing: RAC1_UNLOCKS=<frame>:<op>,.. (the debug menu's Unlocks tab)
+#endif
             if (const char* bo = std::getenv("RAC1_BOLTS"); bo != nullptr && frame == give_frame)  // testing: the bolt count 0x15ed98 set
                 sw(0x0015ed98, static_cast<uint32_t>(std::strtol(bo, nullptr, 0)));
             if (const char* pk = std::getenv("RAC1_POKE8"); pk != nullptr) for (const char* q = pk; *q != 0;) { char* e = nullptr; const uint64_t pf = std::strtoull(q, &e, 0); if (*e != ':') break; const uint32_t pa = static_cast<uint32_t>(std::strtoul(e + 1, &e, 0)); if (*e != '=') break; const uint32_t pv = static_cast<uint32_t>(std::strtoul(e + 1, &e, 0)); if (frame == pf) sb(pa, pv); q = *e == ',' ? e + 1 : e; }  // testing: RAC1_POKE8=<frame>:<addr>=<byte>,.. (e.g. the gold bolts found 0x14bec0[level * 4 + k])

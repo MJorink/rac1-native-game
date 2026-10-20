@@ -3,6 +3,7 @@
 // changed by it. The EE addresses are the ones the ported code uses (src/game/ovl).
 
 #include "dev_menu.h"
+#include "dev_unlocks.h"
 #include "item_give_quiet.h"
 #include "dev_profiler.h"
 
@@ -1413,6 +1414,7 @@ void dev_menu_draw(double update_ms, double frame_ms) {
                 if (tab("Game")) { tab_game(); ImGui::EndTabItem(); }
                 if (tab("Player")) { tab_player(); ImGui::EndTabItem(); }
                 if (tab("Items")) { tab_items(); ImGui::EndTabItem(); }
+                if (tab("Unlocks")) { tab_unlocks(); ImGui::EndTabItem(); }  // (dev_unlocks.cpp)
                 if (tab("Mobys")) { tab_mobys(); ImGui::EndTabItem(); }
                 if (tab("Camera")) { tab_camera(); ImGui::EndTabItem(); }
                 if (tab("Rendering")) { tab_rendering(); ImGui::EndTabItem(); }
