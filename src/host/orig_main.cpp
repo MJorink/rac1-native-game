@@ -674,7 +674,7 @@ struct ScaledScene {
         }
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glViewport(0, 0, w, h);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);  // (the stencil: the ambient occlusion's moby mark starts at 0)
         on = true;
     }
     // a window viewport in the buffer
@@ -2923,7 +2923,8 @@ int main(int argc, char** argv) {
             if (menu_mode || fd.vendor_pic || title || movie_pic != nullptr || fd.exiting) rac1::gs::chain_join();  // (those draws may use the GS replica)
             glViewport(0, 0, w, h);
             glClearColor(0.02f, 0.02f, 0.04f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glClearStencil(0);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);  // (the stencil with the depth: free; the ambient occlusion's moby mark starts at 0)
             glViewport(vx, vy, vw, vh);
             if (g_render_wireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
             mrp_world_finish_frame();  // (the scene: waited for, its triangles and draw lists)
@@ -3028,6 +3029,7 @@ int main(int argc, char** argv) {
                 if (mrp_moby_active()) {  // the MRP's mobys (with RAC1_MRP_DIFF: first both renderers' offscreen, compared)
                     if (s_mrp_diff) mrp_moby_diff(w, h, &gv, gs, fd.fb_w, fd.fb_h, fd.frame, has_dm ? &dm : nullptr);
                     if (g_render_moby) {
+                        mrp_lighting_ao_moby_mark(true);  // (their pixels marked for the ambient occlusion: gentler on them; nothing unless it is on)
                         if (g_scaled_scene.on) {  // (the render scale's buffer, its viewport)
                             const rac1::gs::Viewport sgv = g_scaled_scene.scaled(gv);
                             mrp_moby_draw(w, h, &sgv);
@@ -3044,6 +3046,7 @@ int main(int argc, char** argv) {
                             g_mrp_moby_keep_scissor = false;
                             if (mrp_cut) glDisable(GL_SCISSOR_TEST);
                         }
+                        mrp_lighting_ao_moby_mark(false);
                     }
                 }
                 mrp_lighting_ao_pass();  // (the ambient occlusion over the 3D, before the effects and the 2D; nothing unless asked)

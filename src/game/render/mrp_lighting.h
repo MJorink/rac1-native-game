@@ -37,6 +37,13 @@ extern int g_auto_lights;
 // orig: (host) how far from the camera the mobys cast into the sun's shadows, units (0: as far as the cascades reach;
 // RAC1_SHADOW_MOBY_DIST; Options > Graphics > Shadow Distance)
 extern float g_shadow_moby_dist;
+// orig: (host) the ambient occlusion's intensity, percent of each mode's own strength (RAC1_AO_INTENSITY, default 75;
+// Options > Graphics > AO Intensity)
+extern int g_ao_intensity;
+// orig: (host) the mobys' pixels marked (stencil bit 0) while the MRP draws them, so that the ambient occlusion is gentler on the
+// characters and objects than on the world (RAC1_AO_MOBY): begin before the MRP's mobys, end after them. Nothing unless the modern
+// lighting draws this frame with the occlusion on and the framebuffer has a stencil
+void mrp_lighting_ao_moby_mark(bool begin);
 // orig: (host) ambient occlusion on the 3D (screen space, from the depth; 0 off, the default; RAC1_AO; Options > Graphics)
 extern int g_ao;
 // orig: (host) the sun's rays (light shafts, screen space): 0 off (default), 1 Low, 2 High (RAC1_SUN_RAYS; Options > Graphics > Sun Rays)

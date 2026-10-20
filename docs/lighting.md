@@ -702,6 +702,25 @@ screen: a surface close to the camera samples no further than 4 % of the view's 
 override every mode's reach and strength, `RAC1_AO_DUMP=1` writes the raw occlusion (`ao_<mode>.pgm`,
 the run's last frame) and prints its mean, `RAC1_AO_PROF=1` prints the pass's GPU time.
 
+**AO Intensity** (Options > Graphics, 25 to 125 %, default 75 %) scales the mode's strength (the table's
+strength column is the 100 % one): how dark the occlusion gets, the reach unchanged.
+`RAC1_AO_INTENSITY` (percent) overrides it.
+
+**Gentler on the mobys.** Screen-space occlusion only sees the depth buffer: a character's own arms,
+head and body overlapping on the screen look like deep creases to it, and it darkened faces and limbs
+far more than the world around them (Big Al in his shop on Kerwan, Ratchet's arms against his body).
+While the MRP draws the mobys, their pixels are marked in the stencil (bit 0, written as 1; the
+frame's clear clears the stencil with the depth, and the stencil is free while the modern lighting
+draws: the original's drop shadows, its only other user, are not drawn then). The occlusion pass's
+depth copy carries the stencil; the final blur reads it through a stencil view of that texture and
+keeps 40 % of the occlusion on the mobys' pixels (`RAC1_AO_MOBY`, percent; 100 the same as the world),
+all of it on the world's. The world's pixels around a moby keep their contact darkening (the ground
+under a crate, around Ratchet's feet); the mobys get a softer version of theirs, including where they
+meet the world. Without a stencil in the framebuffer (none known) every pixel gets all of it. The
+cost is within the noise: on Big Al's scene at 5053 x 1371 (GTAO 1/2, Radeon 890M) the mobys' and
+occlusion's GPU stage went from 4.17 to 3.85 ms (the stencil now cleared with the depth makes the
+depth copy cheaper, more than the marking costs), the whole frame 12.26 to 12.13 ms.
+
 **Why the modes looked the same until 0.4.x** (issue #75): every mode used a reach of 0.9 units and
 70 %, tiny at this game's scale (a crate is about 2 units): the raw occlusion averaged 250 to 254 of
 255 at Novalis's start, and the final picture changed by 0.3 to 1.4 levels of 255 on average, by
@@ -781,13 +800,14 @@ does not turn the lighting on.
 | Dynamic Shadows | Off, On | Off | point-light cube shadows |
 | Secondary Lights | Off, Game's, All | All | Game's: the game's point lights per pixel; All: also automatic emitters and hand-placed lights |
 | Ambient Occlusion | Off, SSAO, SSAO+, HBAO, GTAO, GTAO 1/2 | Off | SSAO |
+| AO Intensity | 25 to 125 % | 75 % | the occlusion's darkness: each mode's strength scaled (`ao_intensity` in the preferences, item 47 of a save's block); see [Ambient occlusion](#ambient-occlusion) |
 
 The other rows take effect only when Lighting is not Original.
 
 For testing, environment variables override each of these (they need `--debug-tools`):
 `RAC1_SHADOWS`, `RAC1_SHADOW_RES`, `RAC1_SHADOW_MOBY_DIST`, `RAC1_POINT_SHADOWS`, `RAC1_POINTS`,
 `RAC1_AUTO_LIGHTS`, `RAC1_AO`, and finer ones such as `RAC1_SHADOW_STRENGTH`, `RAC1_SHADOW_SPLITS`,
-`RAC1_SUN_DIR`, `RAC1_SHADOW_CACHE`, `RAC1_AO_RADIUS`, `RAC1_AO_STRENGTH`,
+`RAC1_SUN_DIR`, `RAC1_SHADOW_CACHE`, `RAC1_AO_RADIUS`, `RAC1_AO_STRENGTH`, `RAC1_AO_INTENSITY`, `RAC1_AO_MOBY`,
 `RAC1_POINT_TILES` and `RAC1_SHADOW_DEBUG` (1 shows the cascades, 2 the shadow visibility, 3 the
 point-light term alone).
 

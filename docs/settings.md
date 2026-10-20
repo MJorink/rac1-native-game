@@ -56,6 +56,7 @@ headless runs) the row is the game's own Mono / Stereo.
 | Dynamic Shadows | Off, On | Off |
 | Secondary Lights | Off, Game's, All | All |
 | Ambient Occlusion | Off, SSAO, SSAO+, HBAO, GTAO, GTAO 1/2 | Off |
+| AO Intensity | 25, 50, 75, 100, 125 (%) | 75 |
 | Texture Detail | Full, Original (PS2) | Full |
 
 - **The frame-rate cap** only paces the picture. The game itself always runs at 60 frames a second.

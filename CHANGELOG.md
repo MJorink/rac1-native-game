@@ -46,6 +46,9 @@ played through the game on it, and the launcher installs and updates it with a d
 - **Sun Rays** (Options > Graphics: Off, Low, High): shafts of light from the sun through openings.
 - **Ambient Occlusion** has six values (Off, SSAO, SSAO+, HBAO, GTAO, GTAO at half resolution), and
   each mode is now visible and different (#75).
+- **AO Intensity** (Options > Graphics, 25 to 125 %, default 75 %): how dark the ambient occlusion
+  is. The characters and objects get less of it than the world (Big Al's face and arms in his shop
+  were too dark); the ground around them keeps its contact darkening.
 
 With Lighting on Original (the default) the picture is unchanged.
 
