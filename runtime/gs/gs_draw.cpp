@@ -848,8 +848,25 @@ void draw(const Gs& gs, int win_w, int win_h, float FB_W, float FB_H, const Dept
             y1 = std::min(y1, ch - 1 - v.crop[3]);
             if (x1 < x0 || y1 < y0) continue;
         }
+        // a HUD wider than 4:3 (Viewport::hud_shift): an element at the frame's left / right side moved toward the window's
+        // edges, its scissor with it (the frame's edges become the wider HUD's: what slides out past them is cut there)
+        float hud_dx = 0.0f;
+        if (v.hud_shift != 0.0f && p.hud != 0 && !to_rt && !proj3d && !p.vu && !p.wide && !p.layer && !full_span) {
+            const float k = sx * static_cast<float>(v.w) / FB_W;  // (window pixels a frame pixel: whole window pixels moved, the HUD as sharp)
+            hud_dx = std::round(v.hud_shift * k) / k * (p.hud == 1 ? -1.0f : 1.0f);
+            for (V& q : verts) q.x += hud_dx;
+        }
         if (to_rt) {
             k.sc[0] = x0; k.sc[1] = y0; k.sc[2] = x1 - x0 + 1; k.sc[3] = y1 - y0 + 1;
+        } else if (hud_dx != 0.0f) {
+            auto wxu = [&](float x) { return static_cast<float>(v.x) + ((x / FB_W * 2.0f - 1.0f) * sx + 1.0f) * 0.5f * static_cast<float>(v.w); };
+            const float sy = static_cast<float>(v.h) / FB_H;
+            const int sx0 = std::clamp(static_cast<int>(wxu(static_cast<float>(x0) + hud_dx)), v.x, v.x + v.w);
+            const int sx1 = std::clamp(static_cast<int>(wxu(static_cast<float>(x1 + 1) + hud_dx)), v.x, v.x + v.w);
+            k.sc[0] = sx0;
+            k.sc[1] = static_cast<int>(static_cast<float>(v.y) + static_cast<float>(v.h) - static_cast<float>(y1 + 1) * sy);
+            k.sc[2] = std::max(0, sx1 - sx0);
+            k.sc[3] = static_cast<int>(static_cast<float>(y1 - y0 + 1) * sy);
         } else {
             // the frame's edges cut what is beyond them (a 4:3 frame narrower than the window)
             auto wx = [&](float x) { return static_cast<float>(v.x) + ((std::clamp(x, 0.0f, FB_W) / FB_W * 2.0f - 1.0f) * sx + 1.0f) * 0.5f * static_cast<float>(v.w); };

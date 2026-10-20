@@ -47,6 +47,7 @@ headless runs) the row is the game's own Mono / Stereo.
 | Render Resolution | x0.50 to x2.00 of the window's, in steps of 0.25 | x1.00 |
 | Aspect Ratio | 4:3 Original, 16:9, Fill Screen | 4:3 Original |
 | Fit to Screen | Black Bars, Stretch | Black Bars |
+| HUD | 4:3 Original, 16:9, 21:9, 32:9, Fit Screen | 4:3 Original |
 | Field of View | x0.75 to x1.50 of the original's | x1.00 |
 | Level of Detail | Original, Low, Medium, High, Maximum | Original |
 | Lighting | Original, Low, Medium, High | Original |
@@ -89,6 +90,18 @@ headless runs) the row is the game's own Mono / Stereo.
 - **Aspect Ratio** Fill Screen widens the 3D to the window's shape without changing what the game
   sees; **Fit to Screen** applies when the chosen shape is not the window's. See
   [Rendering](rendering.md#widescreen-and-render-scale).
+- **HUD** spreads the HUD over a wider area when the 3D is widened (Aspect Ratio 16:9 or Fill Screen).
+  4:3 Original keeps it on the original's 4:3 frame in the middle; 16:9, 21:9 (64:27, an ultrawide
+  2560 x 1080's) and 32:9 spread it over a box of that shape centred in the view; Fit Screen over the
+  view's whole width. The box is never wider than the view (16:9 on a 16:9 view is Fit Screen). On a
+  32:9 screen, 16:9 or 21:9 keeps the HUD near the middle of the view; Fit Screen puts it at the far
+  edges. Only the elements the game anchors to a side move, each by the same amount, toward its
+  side: the ammo and the weapon, the quick select (and Gadgebot's commands), the bottom left slot on
+  the left; the bolts, the air meter, the Morph-o-Ray, the Metal Detector and the bottom right slot on
+  the right. The elements the game centres stay in the middle (health, the help panel, the help
+  messages, subtitles, the bosses' bars in the top middle slot). The game's own HUD layout decides:
+  each of its 13 slots is aligned left, right or centred (see [Rendering](rendering.md#the-hud-in-a-widened-view)).
+  Menus, the pause screen, the Vendor, cards, pictures, fades and the letterbox are not changed.
 - **The full frame** is always shown, everything the PS2 drew, edges included. Until 0.4 an Overscan
   row (TV, the default, or Full Frame) could hide a thin strip at the left, right and top edges, as a
   TV of the time did; the row was removed. The one thing the game itself draws there that a TV hid, a
@@ -201,7 +214,7 @@ To try the panel without a new release: `RAC1_UPDATE_FAKE=0.9.0` (or `dev:12`) w
 to other files.
 
 The window's own settings (display mode, window size, v-sync, frame-rate cap) belong to the machine
-and are kept only in the preferences. The picture settings (render resolution, aspect ratio, fit,
+and are kept only in the preferences. The picture settings (render resolution, aspect ratio, fit, HUD,
 field of view, level of detail, the lighting rows, texture detail) and the Advanced settings are also written into
 each save's `save<N>.pc`, so loading a save brings back the settings it was played with. A save
 without that file (an older one) keeps the current settings.

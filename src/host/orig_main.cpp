@@ -1846,6 +1846,11 @@ int main(int argc, char** argv) {
     if (const char* ws = std::getenv("RAC1_WINDOW")) std::sscanf(ws, "%dx%d", &win_w0, &win_h0);
     if (const char* rs = std::getenv("RAC1_RENDER_SCALE")) rac1::graphics_set_render_scale_percent(std::atoi(rs));  // testing: the 3D's render scale, percent
     if (const char* vm = std::getenv("RAC1_VIEW_MODE")) g_view_mode = std::atoi(vm);
+    // testing: RAC1_HUD=4:3|16:9|21:9|32:9|fit, the HUD's width (Options > Graphics > HUD)
+    if (const char* hv = std::getenv("RAC1_HUD")) {
+        const std::string h = hv;
+        g_hud_aspect = h == "16:9" ? 16.0f / 9.0f : h == "21:9" ? 64.0f / 27.0f : h == "32:9" ? 32.0f / 9.0f : h == "fit" ? 1.0e6f : 0.0f;
+    }
     // testing: RAC1_FULLSCREEN=1 a fullscreen window on the primary monitor at its own mode (as the debug menu's
     // Fullscreen does); RAC1_VSYNC=0|1 and RAC1_FPS_CAP=n (0 unlimited) override the debug menu's display settings
     GLFWmonitor* fs_monitor = nullptr;
@@ -2734,6 +2739,14 @@ int main(int argc, char** argv) {
                 // widened view; not on a chain walked again (a fade's: the frame before's) or the menu's
                 if (chain_runs && !prev_chain && !menu_mode)
                     if (auto layers = render_view_layers(); !layers.empty()) gs.set_chain_layers(std::move(layers));
+                // the HUD's side elements the last update drew (render_view_hud_note), for a HUD wider than 4:3; the same frames
+                if (chain_runs && !prev_chain && !menu_mode)
+                    if (const auto notes = render_view_hud_notes(); !notes.empty()) {
+                        std::vector<rac1::gs::Gs::HudRange> hr;
+                        hr.reserve(notes.size());
+                        for (const HudNote& n : notes) hr.push_back({n.first, n.last, n.side});
+                        gs.set_chain_hud(std::move(hr));
+                    }
                 if (chain_runs) {
                     // (the chain's tags and data captured here, its run on a worker thread: joined before the drawing, the
                     // next chain and the game's own GS transfers (libgraph); RAC1_GS_THREAD=0 or the testing modes: here)
@@ -2783,6 +2796,7 @@ int main(int argc, char** argv) {
             fd.gv.xscale = 1.0f / g_view_widen;
             fd.fb_w = static_cast<float>(lhu(0x001518d0));
             fd.fb_h = static_cast<float>(lhu(0x001518d2));
+            fd.gv.hud_shift = fd.menu_mode ? 0.0f : render_view_hud_shift(fd.fb_w);  // (a HUD wider than 4:3: its side elements moved)
             render_overscan_crop(fd.fb_w, fd.fb_h, fd.gv.crop);  // the full frame (testing: RAC1_OVERSCAN cuts the 2D to a TV's area)
             // the glyphs' sampling inside their own cells (no neighbouring glyphs' lines around the letters, issue #76): the modern
             // view's; the faithful reference (RAC1_MRP=0) samples as the GS. (testing: RAC1_SPRITE_CLAMP=0 / 1 decides)

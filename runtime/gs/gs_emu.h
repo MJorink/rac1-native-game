@@ -71,6 +71,9 @@ struct Primitive {
     // (host) kicked inside a screen layer's range (Gs::set_chain_layers): a full-screen 2D layer the game draws over its
     // 4:3 frame, stretched across a widened view (gs_draw.cpp)
     bool layer = false;
+    // (host) kicked inside a HUD element's range (Gs::set_chain_hud): 1 an element at the frame's left, 2 at its right; moved
+    // toward the edges of a HUD wider than 4:3 (Viewport::hud_shift, gs_draw.cpp). 0: none (centred, or not the HUD)
+    uint8_t hud = 0;
 };
 
 class Gs {
@@ -155,6 +158,14 @@ public:
     // out-of-range static: a grid of 32 x 32 sprites); their primitives marked `layer`. Any order, not overlapping. Cleared by
     // the next chain.
     void set_chain_layers(std::vector<std::pair<uint32_t, uint32_t>> ranges);
+    // Host (a HUD wider than 4:3): the next chain's tags at addresses in [first, last] (inclusive; the real chain's) belong to a
+    // HUD element anchored at the frame's left (side 1) or right (side 2) edge; their primitives marked `hud`. Any order, not
+    // overlapping. Cleared by the next chain.
+    struct HudRange {
+        uint32_t first = 0, last = 0;
+        uint8_t side = 0;
+    };
+    void set_chain_hud(std::vector<HudRange> ranges);
     size_t fx_mark() const { return fx_mark_; }
     bool fx_external() const { return fx_external_; }
 
@@ -243,6 +254,8 @@ private:
     uint8_t fx_now_ = 0;
     std::vector<std::pair<uint32_t, uint32_t>> layer_ranges_;  // set_chain_layers (sorted by first)
     bool layer_now_ = false;
+    std::vector<HudRange> hud_ranges_;  // set_chain_hud (sorted by first)
+    uint8_t hud_now_ = 0;
     uint32_t fx_id_ = 0;
     size_t fx_mark_ = SIZE_MAX;
     size_t moby_mark_ = SIZE_MAX;
