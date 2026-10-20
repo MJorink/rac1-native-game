@@ -41,7 +41,9 @@ played through the game on it, and the launcher installs and updates it with a d
   hides.
 - **Lights per object class:** every object of a class can be a light, from the level's file:
   Novalis's neon tubes and hanging bulbs, Kerwan's street lamps, Oltanis's plaza lamps.
-- **Sun Rays** (Options > Graphics: Off, Low, High): shafts of light from the sun through openings.
+- **Sun Rays** (Options > Graphics: Off, Low, High): shafts of light where the sun shines through
+  an opening (a tunnel's mouth, between trees or buildings); an open sky around the sun gives none.
+  About 0.45 ms of GPU at 5053 x 1371 with rays showing, almost nothing otherwise.
 - **Ambient Occlusion** has six values (Off, SSAO, SSAO+, HBAO, GTAO, GTAO at half resolution), and
   each mode is now visible and different (#75).
 
