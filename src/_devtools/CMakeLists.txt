@@ -8,6 +8,7 @@ endif()
 
 add_library(rac1_devtools STATIC
     dev_menu.cpp
+    dev_unlocks.cpp
 )
 target_include_directories(rac1_devtools PUBLIC
     ${CMAKE_SOURCE_DIR}
