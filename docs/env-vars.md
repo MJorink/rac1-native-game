@@ -238,7 +238,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_SUN_LEVEL` | set (any value) = on; default off | The modern lighting's sun always uses the level's light set 0 (the old way) instead of the light set the hero is lit with. See [Lighting](lighting.md). |
 | `RAC1_SUN_RAYS` | 0 off, 1 Low, 2 High; default the option (Off) | The modern lighting's sun rays, overriding Options > Graphics > Sun Rays. See [Lighting](lighting.md#sun-rays). |
 | `RAC1_SUN_RAYS_GAIN` | float; default 1 | Testing: multiplies the sun rays' strength. |
-| `RAC1_SUN_RAYS_TRACE` | set (any value) = on; default off | Every 60 frames prints the sun's place on the screen, the rays' gain and their GPU time. |
+| `RAC1_SUN_RAYS_TRACE` | set (any value) = on, 3 = every frame; default off | Every 60 frames (3: every frame the pass runs) prints the sun's place on the screen, the share of the view lit by openings, the rays' gate and gain, and every 60 frames their GPU time. |
 | `RAC1_SUN_TRACE` | set (any value) = on; default off | Prints the light sets the hero is lit with, for the modern lighting's sun. See [Lighting](lighting.md). |
 | `RAC1_TFRAG_LIGHT_TRACE` | <every>[,x,y,z,r]; default off | Every <every> drawn frames with the modern lighting on, takes the terrain's (tfrag) lit vertex colours within r units (default 12) of the hero, or of x,y,z, apart as the game's relighting makes them: base colour, the light set's two directional terms, against the colour in EE memory; prints the means, the light sets used and the sun. See [Lighting](lighting.md). |
 | `RAC1_TF_HITS` | integer; default 2 | Testing threshold for the terrain shadow build: a candidate with fewer than this many hits is discarded. |

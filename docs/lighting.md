@@ -662,23 +662,53 @@ distance.
 ## Sun rays
 
 Options > Graphics > Sun Rays (Off, Low, High; Off by default), our choice, not the game's: shafts of
-light from the sun where the sky shows through the scene - a tunnel's mouth, the gaps between trees
-(Kerwan's first tunnel, with the level's sun in front, is the showcase). Screen space, at a quarter
-of the 3D's resolution (`sun_rays_pass` in `mrp_lighting.cpp`), after the mobys and the occlusion,
-before the effects, the particles and the 2D:
+light where the sun shines through an opening - a tunnel's mouth, the gaps between trees or
+buildings, a window (Kerwan's first tunnel, with the level's sun ahead, is the showcase). An open
+sky around the sun gives none: turning the camera toward the sun outdoors adds nothing unless
+something stands between the sky and the sun. Screen space, at an eighth of the 3D's resolution
+(`sun_rays_pass` in `mrp_lighting.cpp`), after the mobys and the occlusion, before the effects, the
+particles and the 2D:
 
-1. The mask: the sky's texels (depth 1) near the sun's place on the screen, their colour half tinted
-   by the key light's; everything else black, so only openings toward the sky give rays.
-2. A radial blur of the mask toward the sun (40 taps, each weaker than the one before).
-3. Added to the picture with a soft limit (at most +0.28 Low, +0.45 High a texel), so a wide sky in
-   front of the sun does not burn the picture white.
+1. The sky and its brightness at an eighth: the depth from the ambient occlusion's copy when it made
+   one this frame (else a blit of the depth at an eighth), one texel of each 8 x 8; the colour from a
+   blit at an eighth.
+2. The mask: each sky texel near the sun's place (fading over about half the view's height) counts
+   only when something stands between it and the sun - 12 taps marched toward the sun's place as far
+   as the view goes (beyond its edge: taken as open) -, times its brightness. The sky through a
+   tunnel's mouth is hidden from the sun by the rim, the sky between leaves by the leaves; an open sky
+   around the sun, or above a ridge or the horizon, has nothing between and gives nothing. A dark sky
+   gives nothing either.
+3. The gate: how much of the view the mask covers, followed over a few frames (rays fade in and out
+   as an opening comes into view), read back two frames later without a wait. While it is shut the
+   next steps are skipped and the gate is measured every 4th frame only.
+4. A radial blur of the mask toward the sun (24 taps, each weaker than the one before, each from the
+   mask's mip level that covers its step: no noise), faded out 0.8 .. 1.15 of the view's height from
+   the sun.
+5. Added to the picture in the key light's colour, only in the box 1.15 view heights around the sun,
+   with a soft limit (at most +0.28 Low, +0.45 High a texel).
 
 The rays fade out as the sun leaves the screen (gone 0.6 of the view beyond its edge) or goes behind
 the camera, and follow the sun's weight: none where the zone has no sun, in the level's
-[interiors](#interiors), with the Lighting on Original. The cascades are not used (the sky's
-openings are). Cost on the GPU about 1.5 ms at 5053 x 1371 (the copies of the colour and the depth
-included). `RAC1_SUN_RAYS` (0 / 1 / 2) overrides the option, `RAC1_SUN_RAYS_TRACE` prints the
-sun's place, the gain and the GPU time.
+[interiors](#interiors), with the Lighting on Original. The cascades are not used. With a sun high in
+the sky (Novalis, Eudora: 43 and 50 degrees) the game's camera rarely sees it: the rays show where
+the camera looks up.
+
+**Cost** on the GPU at 5053 x 1371 with a Radeon 890M (Kerwan, the first tunnel and the plaza after
+it; the pass's own time, and the frame's GPU time with the rays Off / Low):
+
+| | Before (0.4.x dev) | Now |
+|---|---|---|
+| Sun on or near the screen, rays showing | 1.3 ms | about 0.45 - 0.55 ms |
+| Sun near the screen, no opening (the gate shut) | 1.3 ms | about 0.1 ms (measured every 4th frame) |
+| Sun off the screen | none | none |
+| Ambient occlusion off (the depth blitted by the rays) | 1.6 ms | about 0.7 ms with rays |
+
+The old pass copied the colour and the depth at a quarter every frame (a scaled blit of the depth
+costs about as much as the texels it writes: 0.45 ms at a quarter) and blended the whole screen.
+Where the time goes now: the full-size add (about 0.2 ms, halved by its box on a wide view), the blur
+(about 0.1), the copies and the small passes. `RAC1_SUN_RAYS` (0 / 1 / 2) overrides the option,
+`RAC1_SUN_RAYS_TRACE` prints the sun's place, the openings' share, the gate and the pass's GPU time
+(`=3`: every frame), `RAC1_SUN_RAYS_GAIN` scales the strength (testing).
 
 ## Ambient occlusion
 

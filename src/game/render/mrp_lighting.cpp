@@ -1083,6 +1083,7 @@ struct Ao {
     int w = 0, h = 0, aw = 0, ah = 0;
     GLint last_fb = -1;
     GLenum dfmt = 0;
+    bool fresh = false;  // this frame's depth copied into dtex (the sun's rays read it: no copy of their own)
     GLint u_depth = -1, u_inv_vp = -1, u_vp = -1, u_cam = -1, u_param = -1;
     GLint u_b_depth = -1, u_b_ao = -1, u_b_texel = -1, u_b_st = -1, u_b_moby = -1;
     GLint u_bs_depth = -1, u_bs_ao = -1, u_bs_texel = -1, u_bs_st = -1, u_bs_moby = -1;
@@ -1102,63 +1103,134 @@ struct AoMark {
 
 // ---- the sun's rays (Options > Graphics > Sun Rays) ------------------------------------------------------------------------
 //
-// Our choice, not the game's: light shafts from the sun where the sky shows through the scene (a tunnel's mouth, the gaps between
-// trees). A quarter of the resolution, screen space: (1) the sky's texels (depth 1) near the sun's place on the screen, their colour tinted by
-// the key light, the rest black; (2) a radial blur of that toward the sun (40 taps, each further one weaker); (3) added to the
-// picture (Low / High: a little / more), faded when the sun leaves the screen or is behind the camera, and with the sun's weight
-// (no rays where the zone has no sun, in the level's interiors, in a zone fading), at most +0.28 / +0.45 a texel (a soft limit: a
-// wide sky in front of the sun does not burn the picture white). Before the effects, the particles and the 2D.
-const char* kRaysMaskFs = R"(#version 460 core
-in vec2 vUv;
-uniform sampler2D uDepth, uColor;
-uniform vec2 uSun;      // the sun's place, 0..1 of the view
-uniform vec2 uAspect;   // (the view's width / height, 1: distances in the screen's proportions)
-uniform vec3 uTint;     // the key light's colour, its largest channel 1
+// Our choice, not the game's: light shafts where the sun shines through an opening - a tunnel's mouth, the gaps between trees or
+// buildings, a window -, not a glow wherever open sky near the sun is in view. Screen space, an eighth of the resolution:
+// (0) the 3D's depth: the ambient occlusion's full-size copy when it made one this frame, else a blit at an eighth (nearest); its
+//     colour at an eighth (a blit, nearest);
+// (1) the sky (depth 1) and its brightness at an eighth (one texel of each 8 x 8), mipmapped;
+// (2) the mask: the sky near the sun's place that has something between it and the sun - marched toward the sun's place
+//     (kRaysSteps taps of the sky's level 1) as far as the view goes, beyond its edge taken as open -, times its brightness (a
+//     dark sky gives none). The sky through a tunnel's mouth or between leaves is hidden from the sun by the rim or the leaves;
+//     an open sky around the sun, or above a ridge, has nothing between: no rays. Mipmapped;
+// (3) the gate: the share of the view the mask covers (the mean of its level 4), followed slowly (a 1 x 1 texture,
+//     ping-ponged: an opening's rays fade in and out over a few frames) and read back two frames later (a pixel buffer: no
+//     wait). While it is shut the blur and the add are skipped and the gate is measured every kRaysShutEvery frames;
+// (4) a radial blur of the mask toward the sun (kRaysTaps taps, each further one weaker, each from the mask's level that covers
+//     about a quarter of its step: no noise), times the gate, faded out kRaysFade .. kRaysReach view heights from the sun;
+// (5) added to the picture in the key light's colour (Low / High: a little / more) with a soft limit (at most +0.28 / +0.45 a
+//     texel), in the box kRaysReach around the sun only, faded when the sun leaves the screen or is behind the camera and with
+//     the sun's weight (none where the zone has no sun, in the level's interiors, in a zone fading). Before the effects, the
+//     particles and the 2D.
+// Cost on the GPU at 5053 x 1371 (a Radeon 890M): about 0.45 ms with rays, 0.1 while the gate is shut, none with the sun off the
+// screen (the version before, a quarter of the resolution with full copies of the colour and the depth: 1.3 ms whenever the sun
+// was near the screen).
+constexpr int kRaysSteps = 12, kRaysTaps = 24, kRaysShutEvery = 4;
+// the rays end this far from the sun's place (view heights; faded from kRaysFade): the blur and the add drawn in that box only (on a
+// wide view about half of it - the add, a full-size blend, is the pass's largest cost)
+constexpr float kRaysFade = 0.8f, kRaysReach = 1.15f;
+constexpr float kRaysGateLo = 0.00002f, kRaysGateHi = 0.0002f, kRaysGateRate = 0.12f;  // (the mask's mean: an opening of a few texels opens it)
+const char* kRaysSkyFs = R"(#version 460 core
+uniform sampler2D uDepth;  // the 3D's depth: the occlusion's copy (full size), or an eighth of its own
+uniform sampler2D uColor;  // the 3D's colour at an eighth
+uniform int uScale;        // (8, 1)
 out vec4 FragColor;
 void main() {
-    float d = texture(uDepth, vUv).r;
-    if (d < 1.0) { FragColor = vec4(0.0); return; }
-    vec3 c = texture(uColor, vUv).rgb;
+    // (one texel of each 8 x 8: reading them all costs as much as the rest of the rays together - the memory's bandwidth)
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    ivec2 q = min(p * uScale + uScale / 2, textureSize(uDepth, 0) - 1);
+    float sky = texelFetch(uDepth, q, 0).r >= 1.0 ? 1.0 : 0.0;
+    float lum = dot(texelFetch(uColor, p, 0).rgb, vec3(0.299, 0.587, 0.114));
+    FragColor = vec4(sky, sky * lum, 0.0, 1.0);  // (the sky; its brightness: a dark sky gives no rays)
+}
+)";
+const char* kRaysMaskFs = R"(#version 460 core
+in vec2 vUv;
+uniform sampler2D uSky;
+uniform vec2 uSun;
+uniform vec2 uAspect;  // (the view's width / height, 1: distances in the view's heights)
+out vec4 FragColor;
+const int S = 12;  // (kRaysSteps)
+void main() {
+    float s = texture(uSky, vUv).g;
     vec2 v = (vUv - uSun) * uAspect;
-    float k = exp(-dot(v, v) * 6.0);  // (the sky near the sun)
-    float lum = dot(c, vec3(0.299, 0.587, 0.114));
-    FragColor = vec4(mix(c, uTint * lum, 0.5) * k, 1.0);
+    float near = exp(-dot(v, v) * 6.0);  // (the sky near the sun)
+    if (s * near < 1e-3) { FragColor = vec4(0.0); return; }
+    // something between this sky and the sun: marched toward the sun's place, as far as the view goes (beyond its edge: unknown,
+    // taken as open)
+    float hit = 0.0;
+    vec2 d = uSun - vUv;
+    for (int k = 1; k <= S; ++k) {
+        vec2 uv = vUv + d * (float(k) / float(S));
+        if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) break;
+        hit = max(hit, 1.0 - textureLod(uSky, uv, 1.0).r);
+    }
+    FragColor = vec4(s * near * hit, 0.0, 0.0, 1.0);
+}
+)";
+const char* kRaysGateFs = R"(#version 460 core
+uniform sampler2D uMask, uPrev;
+uniform float uLod;
+uniform vec3 uParam;  // x, y the share of the view lit by openings for none .. all of the rays, z how fast the gate follows (0..1 a frame)
+out vec4 FragColor;
+void main() {
+    // (the mask's mean, from all the texels of its level uLod - a 16th: its smaller levels drop the odd rows and columns, a small
+    // opening at the view's edge with them)
+    int l = int(uLod);
+    ivec2 n = textureSize(uMask, l);
+    float e = 0.0;
+    for (int y = 0; y < n.y; ++y)
+        for (int x = 0; x < n.x; ++x) e += texelFetch(uMask, ivec2(x, y), l).r;
+    e /= float(n.x * n.y);
+    float prev = texelFetch(uPrev, ivec2(0), 0).r;
+    FragColor = vec4(mix(prev, smoothstep(uParam.x, uParam.y, e), uParam.z), e, 0.0, 1.0);
 }
 )";
 const char* kRaysBlurFs = R"(#version 460 core
 in vec2 vUv;
-uniform sampler2D uMask;
+uniform sampler2D uMask, uGate;
 uniform vec2 uSun;
+uniform vec3 uReach;  // x the view's width / height, y, z the rays fade out between these distances from the sun (view heights)
 uniform vec4 uParam;  // x density (how far toward the sun the taps reach), y decay, z weight, w exposure
 out vec4 FragColor;
+const int N = 24;  // (kRaysTaps)
 void main() {
-    const int N = 40;
     vec2 delta = (vUv - uSun) * (uParam.x / float(N));
+    float lod = floor(clamp(log2(max(length(delta * vec2(textureSize(uMask, 0))), 1.0)) - 1.5, 0.0, 2.0));  // (a level a quarter of a step: no noise, the shafts kept)
     float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-    vec2 uv = vUv - delta * noise;  // (dithered start: no rings)
-    vec3 sum = vec3(0.0);
-    float decay = 1.0;
+    vec2 uv = vUv - delta * (noise - 0.5);  // (dithered start: no rings)
+    float sum = 0.0, decay = 1.0;
     for (int i = 0; i < N; ++i) {
         uv -= delta;
-        sum += texture(uMask, uv).rgb * decay * uParam.z;
+        sum += textureLod(uMask, uv, lod).r * decay;
         decay *= uParam.y;
     }
-    FragColor = vec4(sum * uParam.w, 1.0);
+    float fall = 1.0 - smoothstep(uReach.y, uReach.z, length((vUv - uSun) * vec2(uReach.x, 1.0)));  // (the add's box: kRaysReach)
+    FragColor = vec4(sum * uParam.z * uParam.w * texelFetch(uGate, ivec2(0), 0).r * fall, 0.0, 0.0, 1.0);
 }
 )";
 const char* kRaysAddFs = R"(#version 460 core
 in vec2 vUv;
 uniform sampler2D uRays;
+uniform vec3 uTint;      // the key light's colour, its largest channel 1
 uniform float uK, uCap;  // (the gain, and the most a texel gets: a wide sky in front of the sun does not burn the picture white)
 out vec4 FragColor;
-void main() { FragColor = vec4(uCap * (1.0 - exp(-texture(uRays, vUv).rgb * uK / uCap)), 0.0); }
+void main() { FragColor = vec4(uCap * (1.0 - exp(-texture(uRays, vUv).r * uTint * uK / uCap)), 0.0); }
 )";
 struct Rays {
-    GLuint mask = 0, blur = 0, add = 0, vao = 0;
-    GLuint dfbo = 0, dtex = 0, cfbo = 0, ctex = 0, mfbo = 0, mtex = 0, rfbo = 0, rtex = 0;
-    int w = 0, h = 0;
+    GLuint sky = 0, gate = 0, mask = 0, blur = 0, add = 0, vao = 0;
+    GLuint dfbo = 0, dtex = 0, cfbo = 0, ctex = 0, sfbo = 0, stex = 0, gfbo[2] = {0, 0}, gtex[2] = {0, 0}, mfbo = 0, mtex = 0, rfbo = 0, rtex = 0;
+    GLuint pbo[2] = {0, 0};
+    bool filled[2] = {false, false};
+    bool gate_clear = true;  // (the gate's textures to clear: a new level)
+    int cur = 0;           // the gate's texture written this frame
+    float open = 1.0f;     // the gate read back (two frames old): 0 shut (the blur and the add skipped)
+    float lit = 0.0f;      // (the view's share lit by openings, with it: testing)
+    int w = 0, h = 0, levels = 1;
+    uint32_t shut_frames = 0, sky_frames = 0;
+    bool sky_valid = false;  // (the sky's texture made: a blit of the depth every other frame)
     GLenum dfmt = 0;
     GLint last_fb = -1;
+    int32_t level = -1;
 } g_rays;
 // orig: (host) the depth format of a framebuffer (a blit of its depth wants the same)
 GLenum depth_format(GLint fb) {
@@ -1172,8 +1244,16 @@ GLenum depth_format(GLint fb) {
     return dtype == GL_FLOAT ? (sbits > 0 ? GL_DEPTH32F_STENCIL8 : GL_DEPTH_COMPONENT32F)
                              : (sbits > 0 ? GL_DEPTH24_STENCIL8 : (dbits >= 32 ? GL_DEPTH_COMPONENT32 : dbits >= 24 ? GL_DEPTH_COMPONENT24 : GL_DEPTH_COMPONENT16));
 }
-// orig: (host) the sun's rays added to the bound framebuffer's 3D (see kRaysMaskFs); the caller saves and restores the GL state
+// orig: (host) the sun's rays added to the bound framebuffer's 3D (see kRaysSkyFs); the caller saves and restores the GL state
 void sun_rays_pass(GLint fb, const int vp[4]) {
+    Rays& R = g_rays;
+    const int32_t level = lw(0x0015ed84);
+    if (level != R.level) {  // (a new level: the gate starts shut, nothing of the last level's view kept)
+        R.level = level;
+        R.filled[0] = R.filled[1] = false;
+        R.open = 0.0f;
+        R.gate_clear = true;
+    }
     if (g_sun_rays <= 0 || !(g_sh.sun_k > 0.01f)) return;
     float vpf[16];
     mrp_world_view_proj(vpf);
@@ -1185,20 +1265,36 @@ void sun_rays_pass(GLint fb, const int vp[4]) {
     const float out = std::max({-su.x, su.x - 1.0f, -su.y, su.y - 1.0f, 0.0f});
     const float fade = std::clamp(1.0f - out / 0.6f, 0.0f, 1.0f);
     if (!(fade > 0.0f)) return;
-    Rays& R = g_rays;
-    const int w = vp[2], h = vp[3], hw = std::max(1, w / 4), hh = std::max(1, h / 4);  // (a quarter: the shafts are soft)
-    if (R.mask == 0) {
+    const int w = vp[2], h = vp[3], ew = std::max(1, w / 8), eh = std::max(1, h / 8);
+    if (R.sky == 0) {
+        R.sky = ao_link(kRaysSkyFs);
+        R.gate = ao_link(kRaysGateFs);
         R.mask = ao_link(kRaysMaskFs);
         R.blur = ao_link(kRaysBlurFs);
         R.add = ao_link(kRaysAddFs);
         glGenVertexArrays(1, &R.vao);
-        GLuint f[4], t[4];
-        glGenFramebuffers(4, f);
-        glGenTextures(4, t);
-        rac1::prof::gl_track_n(rac1::prof::kGlTexture, 4, t, "Sun rays");
-        R.dfbo = f[0], R.cfbo = f[1], R.mfbo = f[2], R.rfbo = f[3];
-        R.dtex = t[0], R.ctex = t[1], R.mtex = t[2], R.rtex = t[3];
+        GLuint f[7];
+        glGenFramebuffers(7, f);
+        R.dfbo = f[0], R.sfbo = f[1], R.gfbo[0] = f[2], R.gfbo[1] = f[3], R.mfbo = f[4], R.rfbo = f[5], R.cfbo = f[6];
+        glGenTextures(2, R.gtex);
+        rac1::prof::gl_track_n(rac1::prof::kGlTexture, 2, R.gtex, "Sun rays");
+        for (int i = 0; i < 2; ++i) {
+            glBindTexture(GL_TEXTURE_2D, R.gtex[i]);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RG16F, 1, 1, 0, GL_RG, GL_FLOAT, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glBindFramebuffer(GL_FRAMEBUFFER, R.gfbo[i]);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, R.gtex[i], 0);
+        }
+        glGenBuffers(2, R.pbo);
+        for (GLuint b : R.pbo) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, b);
+            glBufferData(GL_PIXEL_PACK_BUFFER, 4 * sizeof(float), nullptr, GL_STREAM_READ);
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     }
+    // (the gate shut - no opening around the sun -: measured again every kRaysShutEvery frames only)
+    if (!(R.open > 0.002f) && R.w == w && R.h == h && (++R.shut_frames % kRaysShutEvery) != 0) return;
     GLenum fmt = R.dfmt;
     if (fb != R.last_fb || fmt == 0) {
         fmt = depth_format(fb);
@@ -1209,67 +1305,188 @@ void sun_rays_pass(GLint fb, const int vp[4]) {
         R.w = w;
         R.h = h;
         R.dfmt = fmt;
-        auto tex = [](GLuint t, GLint ifmt, int tw, int th, GLenum f2, GLenum ty, GLint filter) {
-            glBindTexture(GL_TEXTURE_2D, t);
-            glTexImage2D(GL_TEXTURE_2D, 0, ifmt, tw, th, 0, f2, ty, nullptr);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+        GLuint old[5] = {R.dtex, R.stex, R.mtex, R.rtex, R.ctex};
+        if (old[0] != 0) glDeleteTextures(5, old);
+        GLuint t[5];
+        glGenTextures(5, t);
+        R.dtex = t[0], R.stex = t[1], R.mtex = t[2], R.rtex = t[3], R.ctex = t[4];
+        R.sky_valid = false;
+        R.levels = 1;
+        while ((std::max(ew, eh) >> R.levels) > 0 && R.levels < 5) ++R.levels;
+        auto tex = [](GLuint id, GLenum ifmt, int tw, int th, int lv, GLint minf, GLint magf) {
+            glBindTexture(GL_TEXTURE_2D, id);
+            const bool depth = ifmt == GL_DEPTH24_STENCIL8 || ifmt == GL_DEPTH32F_STENCIL8 || ifmt == GL_DEPTH_COMPONENT32F || ifmt == GL_DEPTH_COMPONENT32 ||
+                               ifmt == GL_DEPTH_COMPONENT24 || ifmt == GL_DEPTH_COMPONENT16;
+            const bool dst = ifmt == GL_DEPTH24_STENCIL8 || ifmt == GL_DEPTH32F_STENCIL8;
+            const GLenum f2 = depth ? (dst ? GL_DEPTH_STENCIL : GL_DEPTH_COMPONENT) : ifmt == GL_RG8 ? GL_RG : ifmt == GL_RGBA8 ? GL_RGBA : GL_RED;
+            const GLenum ty = ifmt == GL_DEPTH24_STENCIL8 ? GL_UNSIGNED_INT_24_8 : ifmt == GL_DEPTH32F_STENCIL8 ? GL_FLOAT_32_UNSIGNED_INT_24_8_REV : depth ? GL_FLOAT
+                              : ifmt == GL_R8 || ifmt == GL_RG8 || ifmt == GL_RGBA8 ? GL_UNSIGNED_BYTE : GL_FLOAT;
+            for (int l = 0; l < lv; ++l)
+                glTexImage2D(GL_TEXTURE_2D, l, static_cast<GLint>(ifmt), std::max(1, tw >> l), std::max(1, th >> l), 0, f2, ty, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, lv - 1);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minf);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magf);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         };
-        tex(R.dtex, static_cast<GLint>(fmt), hw, hh, st ? GL_DEPTH_STENCIL : GL_DEPTH_COMPONENT,
-            fmt == GL_DEPTH24_STENCIL8 ? GL_UNSIGNED_INT_24_8 : fmt == GL_DEPTH32F_STENCIL8 ? GL_FLOAT_32_UNSIGNED_INT_24_8_REV : GL_FLOAT, GL_NEAREST);
+        tex(R.dtex, fmt, ew, eh, 1, GL_NEAREST, GL_NEAREST);
         glBindFramebuffer(GL_FRAMEBUFFER, R.dfbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, st ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, R.dtex, 0);
         glDrawBuffer(GL_NONE);
         glReadBuffer(GL_NONE);
-        tex(R.ctex, GL_RGBA8, hw, hh, GL_RGBA, GL_UNSIGNED_BYTE, GL_LINEAR);
-        glBindFramebuffer(GL_FRAMEBUFFER, R.cfbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, R.ctex, 0);
-        tex(R.mtex, GL_RGBA16F, hw, hh, GL_RGBA, GL_FLOAT, GL_LINEAR);
+        tex(R.stex, GL_RG8, ew, eh, R.levels, GL_LINEAR_MIPMAP_LINEAR, GL_LINEAR);
+        glBindFramebuffer(GL_FRAMEBUFFER, R.sfbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, R.stex, 0);
+        tex(R.mtex, GL_R16F, ew, eh, R.levels, GL_LINEAR_MIPMAP_LINEAR, GL_LINEAR);
         glBindFramebuffer(GL_FRAMEBUFFER, R.mfbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, R.mtex, 0);
-        tex(R.rtex, GL_RGBA16F, hw, hh, GL_RGBA, GL_FLOAT, GL_LINEAR);
+        tex(R.ctex, GL_RGBA8, ew, eh, 1, GL_NEAREST, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, R.cfbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, R.ctex, 0);
+        tex(R.rtex, GL_R16F, ew, eh, 1, GL_LINEAR, GL_LINEAR);
         glBindFramebuffer(GL_FRAMEBUFFER, R.rfbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, R.rtex, 0);
     }
-    // the 3D's depth (nearest) and colour (linear) at half size
+    // the gate read back (written two frames ago: no wait)
+    {
+        const int slot = R.cur;  // (the buffer filled two frames ago is the one this frame fills again)
+        if (R.filled[slot]) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, R.pbo[slot]);
+            if (const void* p = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 4 * sizeof(float), GL_MAP_READ_BIT)) {
+                float v[4];
+                std::memcpy(v, p, sizeof v);
+                R.open = v[0];
+                R.lit = v[1];
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            }
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        }
+    }
+    if (R.gate_clear) {  // (the gate starts shut)
+        R.gate_clear = false;
+        GLfloat cc[4];
+        glGetFloatv(GL_COLOR_CLEAR_VALUE, cc);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        for (GLuint f : R.gfbo) {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, f);
+            glClear(GL_COLOR_BUFFER_BIT);
+        }
+        glClearColor(cc[0], cc[1], cc[2], cc[3]);
+    }
+    // (0) the 3D's depth: the occlusion's copy of it when it made one this frame (full size), else a blit at an eighth (nearest, its
+    // depth only) - every other frame only: reading the depth buffer costs a pass over all of it (about 0.5 ms at 5053 x 1371 with a
+    // Radeon 890M, whatever the blit's size), the occlusion pays it when it is on; the sky a frame old is not seen in soft shafts.
+    // Its colour at an eighth (nearest), with it.
+    const bool ao_depth = g_ao_s.fresh && g_ao_s.w == w && g_ao_s.h == h && g_ao_s.dtex != 0;
+    const bool sky_new = ao_depth || !R.sky_valid || !(R.open > 0.002f) || (++R.sky_frames & 1u) == 0;  // (shut: measured every 4th frame, afresh)
     glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(fb));
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.dfbo);
-    glBlitFramebuffer(vp[0], vp[1], vp[0] + w, vp[1] + h, 0, 0, hw, hh, GL_DEPTH_BUFFER_BIT | (st ? GL_STENCIL_BUFFER_BIT : 0), GL_NEAREST);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.cfbo);
-    glBlitFramebuffer(vp[0], vp[1], vp[0] + w, vp[1] + h, 0, 0, hw, hh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    if (sky_new) {
+        if (!ao_depth) {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.dfbo);
+            glBlitFramebuffer(vp[0], vp[1], vp[0] + w, vp[1] + h, 0, 0, ew, eh, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        }
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.cfbo);  // (the sky's brightness)
+        glBlitFramebuffer(vp[0], vp[1], vp[0] + w, vp[1] + h, 0, 0, ew, eh, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    }
     glDisable(GL_BLEND);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glBindVertexArray(R.vao);
-    glViewport(0, 0, hw, hh);
-    const float tmax = std::max({g_sh.key.x, g_sh.key.y, g_sh.key.z, 1e-3f});
-    const glm::vec3 tint = g_sh.key.x + g_sh.key.y + g_sh.key.z > 0.0f ? glm::vec3(g_sh.key) / tmax : glm::vec3(1.0f, 0.95f, 0.85f);
-    // (1) the mask
+    glActiveTexture(GL_TEXTURE0);
+    // (1) the sky and its brightness, an eighth, mipmapped
+    if (sky_new) {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.sfbo);
+        glViewport(0, 0, ew, eh);
+        glUseProgram(R.sky);
+        glBindTexture(GL_TEXTURE_2D, ao_depth ? g_ao_s.dtex : R.dtex);
+        glUniform1i(glGetUniformLocation(R.sky, "uDepth"), 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, R.ctex);
+        glUniform1i(glGetUniformLocation(R.sky, "uColor"), 1);
+        glActiveTexture(GL_TEXTURE0);
+        glUniform1i(glGetUniformLocation(R.sky, "uScale"), ao_depth ? 8 : 1);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glBindTexture(GL_TEXTURE_2D, R.stex);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        R.sky_valid = true;
+    }
+    glViewport(0, 0, ew, eh);
+    glBindTexture(GL_TEXTURE_2D, R.stex);
+    // (2) the mask: the sky near the sun with something between it and the sun; mipmapped
+    const float aspect = static_cast<float>(w) / static_cast<float>(std::max(h, 1));
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.mfbo);
     glUseProgram(R.mask);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, R.dtex);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, R.ctex);
-    glUniform1i(glGetUniformLocation(R.mask, "uDepth"), 0);
-    glUniform1i(glGetUniformLocation(R.mask, "uColor"), 1);
+    glUniform1i(glGetUniformLocation(R.mask, "uSky"), 0);
     glUniform2f(glGetUniformLocation(R.mask, "uSun"), su.x, su.y);
-    glUniform2f(glGetUniformLocation(R.mask, "uAspect"), static_cast<float>(w) / static_cast<float>(std::max(h, 1)), 1.0f);
-    glUniform3f(glGetUniformLocation(R.mask, "uTint"), tint.x, tint.y, tint.z);
+    glUniform2f(glGetUniformLocation(R.mask, "uAspect"), aspect, 1.0f);
     glDrawArrays(GL_TRIANGLES, 0, 3);
-    // (2) the radial blur
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.rfbo);
-    glUseProgram(R.blur);
-    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, R.mtex);
-    glUniform1i(glGetUniformLocation(R.blur, "uMask"), 0);
-    glUniform2f(glGetUniformLocation(R.blur, "uSun"), su.x, su.y);
-    glUniform4f(glGetUniformLocation(R.blur, "uParam"), 0.9f, 0.945f, 1.0f / 40.0f * 4.0f, 1.0f);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    // (3) the gate: how much of the view the openings light, followed slowly; read back later
+    const int cur = R.cur, prev = cur ^ 1;
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.gfbo[cur]);
+    glViewport(0, 0, 1, 1);
+    glUseProgram(R.gate);
+    glUniform1i(glGetUniformLocation(R.gate, "uMask"), 0);
+    glUniform1f(glGetUniformLocation(R.gate, "uLod"), static_cast<float>(R.levels - 1));  // (level 4 at most)
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, R.gtex[prev]);
+    glUniform1i(glGetUniformLocation(R.gate, "uPrev"), 1);
+    glUniform3f(glGetUniformLocation(R.gate, "uParam"), kRaysGateLo, kRaysGateHi, kRaysGateRate);
     glDrawArrays(GL_TRIANGLES, 0, 3);
-    // (3) added to the picture
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, R.gfbo[cur]);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, R.pbo[cur]);
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, nullptr);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    R.filled[cur] = true;
+    R.cur = prev;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(fb));
     static const float gain_env = std::getenv("RAC1_SUN_RAYS_GAIN") != nullptr ? static_cast<float>(std::atof(std::getenv("RAC1_SUN_RAYS_GAIN"))) : 1.0f;  // (testing)
     const float k = (g_sun_rays >= 2 ? 7.0f : 3.5f) * gain_env * fade * std::min(g_sh.sun_k, 1.0f);
+    static const int trace_every = std::getenv("RAC1_SUN_RAYS_TRACE") != nullptr && std::atoi(std::getenv("RAC1_SUN_RAYS_TRACE")) == 3 ? 1 : 60;  // (testing: 3 every frame)
+    static const bool trace = std::getenv("RAC1_SUN_RAYS_TRACE") != nullptr;
+    if (trace) {
+        static uint64_t n = 0;
+        if (n++ % trace_every == 0)
+            std::printf("[rays] sun at %.2f %.2f of the view (toward %.3f %.3f %.3f), fade %.2f, weight %.2f, openings %.5f, gate %.3f: %.2f\n", su.x, su.y, g_sh.sun.x, g_sh.sun.y,
+                        g_sh.sun.z, fade, g_sh.sun_k, R.lit, R.open, k);
+    }
+    if (!(R.open > 0.002f)) return;  // (the gate shut: no opening toward the sun)
+    // (4) the radial blur (times the gate)
+    glBindTexture(GL_TEXTURE_2D, R.gtex[cur]);
+    glActiveTexture(GL_TEXTURE0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.rfbo);
+    glViewport(0, 0, ew, eh);
+    glUseProgram(R.blur);
+    glUniform1i(glGetUniformLocation(R.blur, "uMask"), 0);
+    glUniform1i(glGetUniformLocation(R.blur, "uGate"), 1);
+    glUniform2f(glGetUniformLocation(R.blur, "uSun"), su.x, su.y);
+    glUniform4f(glGetUniformLocation(R.blur, "uParam"), 0.9f, 0.910f, 4.0f / static_cast<float>(kRaysTaps), 1.0f);
+    glUniform3f(glGetUniformLocation(R.blur, "uReach"), aspect, kRaysFade, kRaysReach);
+    // (the box: kRaysReach around the sun, in the view's 0..1)
+    const float bx0 = std::clamp(su.x - kRaysReach / aspect, 0.0f, 1.0f), bx1 = std::clamp(su.x + kRaysReach / aspect, 0.0f, 1.0f);
+    const float by0 = std::clamp(su.y - kRaysReach, 0.0f, 1.0f), by1 = std::clamp(su.y + kRaysReach, 0.0f, 1.0f);
+    auto box = [&](int x0, int y0, int bw, int bh) {
+        const int sx0 = x0 + static_cast<int>(std::floor(bx0 * static_cast<float>(bw))) - 1, sy0 = y0 + static_cast<int>(std::floor(by0 * static_cast<float>(bh))) - 1;
+        const int sx1 = x0 + static_cast<int>(std::ceil(bx1 * static_cast<float>(bw))) + 1, sy1 = y0 + static_cast<int>(std::ceil(by1 * static_cast<float>(bh))) + 1;
+        glScissor(std::max(sx0, x0), std::max(sy0, y0), std::max(0, std::min(sx1, x0 + bw) - std::max(sx0, x0)), std::max(0, std::min(sy1, y0 + bh) - std::max(sy0, y0)));
+    };
+    const bool empty = !(bx1 > bx0) || !(by1 > by0);
+    if (empty) return;
+    GLfloat cc[4];
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, cc);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);  // (outside the box: none - the add's bilinear taps at its edge read it)
+    glClear(GL_COLOR_BUFFER_BIT);
+    glClearColor(cc[0], cc[1], cc[2], cc[3]);
+    GLint sbox[4];
+    glGetIntegerv(GL_SCISSOR_BOX, sbox);  // (put back at the end: the caller restores the test, not the box)
+    glEnable(GL_SCISSOR_TEST);
+    box(0, 0, ew, eh);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    // (5) added to the picture
+    const float tmax = std::max({g_sh.key.x, g_sh.key.y, g_sh.key.z, 1e-3f});
+    const glm::vec3 tint = g_sh.key.x + g_sh.key.y + g_sh.key.z > 0.0f ? glm::vec3(g_sh.key) / tmax : glm::vec3(1.0f, 0.95f, 0.85f);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(fb));
     glViewport(vp[0], vp[1], w, h);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
@@ -1278,14 +1495,14 @@ void sun_rays_pass(GLint fb, const int vp[4]) {
     glUseProgram(R.add);
     glBindTexture(GL_TEXTURE_2D, R.rtex);
     glUniform1i(glGetUniformLocation(R.add, "uRays"), 0);
+    glUniform3f(glGetUniformLocation(R.add, "uTint"), tint.x, tint.y, tint.z);
     glUniform1f(glGetUniformLocation(R.add, "uK"), k);
     glUniform1f(glGetUniformLocation(R.add, "uCap"), (g_sun_rays >= 2 ? 0.45f : 0.28f) * std::max(fade * std::min(g_sh.sun_k, 1.0f), 1e-3f));
+    box(vp[0], vp[1], w, h);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glDisable(GL_BLEND);
-    if (std::getenv("RAC1_SUN_RAYS_TRACE") != nullptr) {
-        static uint64_t n = 0;
-        if (n++ % 60 == 0) std::printf("[rays] sun at %.2f %.2f of the view, fade %.2f, weight %.2f: %.2f\n", su.x, su.y, fade, g_sh.sun_k, k);
-    }
+    glDisable(GL_SCISSOR_TEST);
+    glScissor(sbox[0], sbox[1], sbox[2], sbox[3]);
 }
 
 // ---- the view covered from the sun -----------------------------------------------------------------------------------
@@ -1556,6 +1773,7 @@ void mrp_lighting_ao_moby_mark(bool begin) {
 
 // orig: (host) see mrp_lighting.h
 void mrp_lighting_ao_pass() {
+    g_ao_s.fresh = false;
     if (!g_sh.on) return;
     int vp[4];
     if (!mrp_world_last_viewport(vp)) return;
@@ -1713,6 +1931,7 @@ void mrp_lighting_ao_pass() {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, A.dfbo);
         const bool st = fmt == GL_DEPTH24_STENCIL8 || fmt == GL_DEPTH32F_STENCIL8;
         glBlitFramebuffer(vp[0], vp[1], vp[0] + w, vp[1] + h, 0, 0, w, h, GL_DEPTH_BUFFER_BIT | (st ? GL_STENCIL_BUFFER_BIT : 0), GL_NEAREST);
+        A.fresh = true;
         GLint bsrc = 0, bdst = 0, bsrca = 0, bdsta = 0, prev_tex = 0, prev_tex1 = 0;
         glGetIntegerv(GL_BLEND_SRC_RGB, &bsrc);
         glGetIntegerv(GL_BLEND_DST_RGB, &bdst);
