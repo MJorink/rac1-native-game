@@ -708,6 +708,17 @@ void Gs::chain_walk(uint32_t tag, uint32_t end, Mem&& mem) {
             g.sub_wide_ = g.sub_drop_ = g.vundo_on_ = false;
         }
     } clear_sub{*this};
+    struct SideWiden {  // (host) the view's widening for the VU1 programs this walk runs (set_side_widen), on this thread
+        float before[2];
+        explicit SideWiden(const float w[2]) : before{vu1::g_side_widen[0], vu1::g_side_widen[1]} {
+            vu1::g_side_widen[0] = w[0] > 1.0f ? w[0] : 1.0f;
+            vu1::g_side_widen[1] = w[1] > 1.0f ? w[1] : 1.0f;
+        }
+        ~SideWiden() {
+            vu1::g_side_widen[0] = before[0];
+            vu1::g_side_widen[1] = before[1];
+        }
+    } side_widen{side_widen_};
     std::vector<uint32_t> stack;
     std::vector<uint8_t> buf;
     uint32_t addr = tag & 0x01fffff0u;
@@ -924,6 +935,8 @@ void Gs::capture_chain(uint32_t tag, uint32_t end, ChainCapture& c) const {
     c.size = 0;
     c.spans.clear();
     c.subs.clear();
+    c.side_widen[0] = side_widen_[0];
+    c.side_widen[1] = side_widen_[1];
     for (int k = 0; k < static_cast<int>(subs_.size()); ++k) c.subs.push_back({subs_[static_cast<size_t>(k)].first, subs_[static_cast<size_t>(k)].end, sub_size_of(k)});
     auto take = [&c, this](uint32_t a, uint32_t len) -> const uint8_t* {
         const uint8_t* src = sub_mem(a);
@@ -1007,6 +1020,8 @@ void Gs::vif1_chain(const ChainCapture& c) {
         v.replay_size = u[2];
         subs_.push_back(std::move(v));
     }
+    side_widen_[0] = c.side_widen[0];
+    side_widen_[1] = c.side_widen[1];
     chain_walk(c.tag, c.end, [&c, &at](uint32_t a, uint32_t) -> const uint8_t* {
         if (at < c.spans.size() && c.spans[at][0] == a) {
             const auto& sp = c.spans[at++];

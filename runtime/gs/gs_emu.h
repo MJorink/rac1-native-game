@@ -95,6 +95,7 @@ public:
         size_t size = 0, cap = 0;
         std::vector<std::array<uint32_t, 3>> spans;  // (EE address, offset in bytes, length; 0xffffffff: a null pointer)
         std::vector<std::array<uint32_t, 3>> subs;  // the substitutes the capture was made with (add_chain_substitute): first, end, size
+        float side_widen[2] = {1.0f, 1.0f};         // set_side_widen's as the capture was made
     };
     void capture_chain(uint32_t tag, uint32_t end, ChainCapture& c) const;
     void vif1_chain(const ChainCapture& c);
@@ -128,6 +129,10 @@ public:
     // Cleared by the next chain.
     static constexpr int kMaxSubs = 4;
     void add_chain_substitute(uint32_t first, uint32_t end, std::vector<uint8_t> chain);
+    // Host (the widescreen's sides): the view the next chains' 3D is drawn into is `wx` x `wy` times as wide as the game's 4:3
+    // frustum (1 1: the game's own). While a chain is walked the VU1 programs see it (vu1::g_side_widen): a primitive past the
+    // 4:3 sides that the wider view shows is not dropped (the shadow program's side test, shadows_vu1.cpp). Kept until set again.
+    void set_side_widen(float wx, float wy) { side_widen_[0] = wx; side_widen_[1] = wy; }
     uint64_t skipped_tags() const { return skipped_tags_; }
     // Host (the MRP's particles): the next chain's tags at addresses in [first, last] (inclusive; `sub`: the substitute's
     // tags, add_chain_substitute, else the real chain's) are processed as usual - VIF codes, the VU1 programs, the GS registers -,
@@ -203,6 +208,7 @@ private:
         uint32_t replay_size = 0xffffffffu;  // (a capture's replay: the substitute's size it was made with)
     };
     std::vector<Sub> subs_;
+    float side_widen_[2] = {1.0f, 1.0f};  // set_side_widen
     bool sub_wide_ = false, sub_drop_ = false;
     static constexpr uint32_t kSubFlag = 0x80000000u;
     static constexpr int kSubShift = 26;

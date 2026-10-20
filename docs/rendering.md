@@ -281,7 +281,14 @@ Many of those callbacks test their cells with the game's point test (0x2002e0), 
 copies of the projection's tangents (0x16cd00..0x16cd2f), and the quad drawer (0x1fd228) rejects a
 quad past about twice the 4:3 frame's half width: the shadow blocks widen those too (keeping the
 guard band the game clips at). Before this, at 32:9 Gaspar's lava was still cut in the outer part of
-each side, and the effect quads (Rilgar's water quads, glows) were rejected there. What is still cut: a surface a moby's update queues
+each side, and the effect quads (Rilgar's water quads, glows) were rejected there. The shadow-mesh
+program (VU1 program 7: the drop shadows, the prim lists of Aridia's sand sea and other surfaces)
+draws a triangle that crosses the guard band clipped, but first drops one lying wholly past a third
+of the guard band (4 / 3 of the 4:3 frame's half width), which a 32:9 view shows: in a widened view
+that test is scaled by the view's widening (the GS replica's walk hands it to the program,
+`gs::Gs::set_side_widen`), the clipping itself left at the game's guard band. Before this, the sand
+sea's cells near the camera at the far left of a 32:9 view (crossing the near plane, so clipped)
+were missing there, black. What is still cut: a surface a moby's update queues
 only when the moby pass drew that moby in the last frame (moby +0x31, the 4:3 view's decision, which
 the shadows cannot change without changing the game's state): one of Rilgar's water patches (class 79),
 the ships' cockpit glass.

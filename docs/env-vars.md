@@ -1,12 +1,12 @@
 # Environment variables
 
-rac1-native reads a number of `RAC1_*` environment variables. This page lists all of them: 297 in
+rac1-native reads a number of `RAC1_*` environment variables. This page lists all of them: 298 in
 total, in three groups.
 
 | Group | Count | Who it is for |
 |---|---|---|
 | [Player](#player-variables) | 18 | Settings a player may want to change: files, window, audio, the ISO |
-| [Debugging](#debugging-variables) | 220 | Developers: profilers, overlays, switching a renderer or an optimisation on or off to compare |
+| [Debugging](#debugging-variables) | 221 | Developers: profilers, overlays, switching a renderer or an optimisation on or off to compare |
 | [Automated testing](#automated-testing-variables) | 59 | Scripted and headless runs: frame counts, screenshots, simulated input, self-checks |
 
 The oracle (`build/tests/ovl_oracle`) reads variables of its own (`ORACLE_*`, `RAC1_ORACLE_DUMPS`): see
@@ -174,6 +174,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_MRP_WIDEN_EFFECTS` | 0 = off; default on | Switches off the widescreen widening of the effects (particles and similar) so they are culled as in 4:3. |
 | `RAC1_MRP_WIDEN_GLOWS` | 0 = off; default on | Switches off the widening of the glows and other drawn-list objects at the sides of a widescreen view, to compare. |
 | `RAC1_MRP_WIDEN_LISTS` | 0 = off; default on | Switches off the widening of the draw lists' callbacks (the levels' water, lava and sand-sea surfaces, culled against the 4:3 clip matrix) at the sides of a widened view, to compare. |
+| `RAC1_MRP_WIDEN_SIDES` | 0 = off; default on | Switches off the widening of the VU1 shadow-mesh program's side test (it drops a clipped triangle lying wholly past 4 / 3 of the 4:3 frame's half width: Aridia's sand sea near the camera at the far sides of a 32:9 view) in a widened view, to compare. |
 | `RAC1_MRP_WIDEN_TERMS` | 0 = off; default on | Switches off the widening of the other frustum tests the draw lists' callbacks make in a widened view (the point test 0x2002e0 that the water, lava and sand-sea grids cull their cells with, the quad drawer's reject of quads past the sides), as before, to compare. |
 | `RAC1_MUSIC_TRACE` | set (any value) = on; default off | Prints the music streams' state (sequence step, tracks, music and dialogue slots) each frame it changes. |
 | `RAC1_OVERSCAN` | 0 = full frame, 1 = the TV's area, or `left,right,top,bottom` in pixels; unset = the full frame | Cuts the frame's 2D to a TV's area (the overscan crop), to compare. The game always shows the full frame. |

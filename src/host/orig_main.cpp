@@ -2621,6 +2621,10 @@ int main(int argc, char** argv) {
                             gs.add_chain_substitute(u.first, u.end, std::move(u.bytes));
                             substituted.push_back(u.slot);
                         }
+                    // (the VU1 programs' side tests over the widened view's sides: the shadow program's clipped triangles, mrp_lod.h)
+                    float sw[2] = {1.0f, 1.0f};
+                    if (chain_runs && !prev_chain && !menu_mode && !fade) mrp_lod_side_widen(sw);
+                    gs.set_side_widen(sw[0], sw[1]);
                 }
                 {  // the MRP's 3D effects: their producers' ranges run by the replica as before, their primitives kept for the MRP
                     std::vector<rac1::gs::Gs::FxRange> fr;

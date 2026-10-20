@@ -46,6 +46,7 @@ bool g_mrp_world_lod_external = false;
 namespace {
 float g_frame_widen = 1.0f;  // the widening measured at the frame's tfrag pass
 float g_frame_widen_snap = 1.0f;  // (captured for a pipelined frame)
+float g_frame_side[2] = {1.0f, 1.0f};  // fill_widen / fill_widen_y at the frame's tfrag pass (mrp_lod_side_widen)
 }
 // orig: (host)
 float mrp_lod_frame_widen() { return g_world_mrp ? (g_draw_from_snapshot ? g_frame_widen_snap : g_frame_widen) : 1.0f; }
@@ -472,6 +473,10 @@ void mrp_lod_world_shadow(int kind, void (*pass)(), uint32_t cur) {
     const float s = kind == 3 || (kind <= 2 && g_mrp_world_lod_external) ? 1.0f : mrp_lod_scale(g_mrp_lod);  // (the sky: no distances, the widening only)
     // (the GS replica's narrowing of the game's projected 3D follows the view, whether the sides are filled or not)
     if (kind == 0) g_frame_widen = g_mrp_lod_widen_off ? 1.0f : render_view_cull_widen();
+    if (kind == 0) {  // (the widening the frame's shadow runs give the view: the GS replica's side tests, mrp_lod_side_widen)
+        g_frame_side[0] = fill_widen();
+        g_frame_side[1] = fill_widen_y();
+    }
     float widen = 1.0f;
     const bool needed = mrp_lod_world_shadows_needed(kind, &widen);
     if (kind <= 2) {  // (the passes whose decisions the MRP's host code makes from the pass's inputs: no shadow run)
@@ -802,6 +807,14 @@ void mrp_lod_list_after(int list, uint32_t cur, uint32_t real_end) {
     L.bytes_total += L.bytes.size();
     L.real_total += real_end - cur;
     L.same += real_end - cur == L.bytes.size() && std::memcmp(ee_ram_ptr(cur), L.bytes.data(), L.bytes.size()) == 0 ? 1u : 0u;
+}
+
+// orig: (host) see mrp_lod.h
+void mrp_lod_side_widen(float out[2]) {
+    static const bool off = std::getenv("RAC1_MRP_WIDEN_SIDES") != nullptr && std::atoi(std::getenv("RAC1_MRP_WIDEN_SIDES")) == 0;  // (testing: before)
+    const bool on = !off && g_world_mrp;  // (measured at the frame's tfrag pass: by the chain's time the tangent may hold the host's widened value)
+    out[0] = on ? std::max(g_frame_side[0], 1.0f) : 1.0f;
+    out[1] = on ? std::max(g_frame_side[1], 1.0f) : 1.0f;
 }
 
 // orig: (host) see mrp_lod.h
