@@ -1,5 +1,6 @@
 // See gs_draw.h.
 #include <runtime/gs/gs_draw.h>
+#include <profiler/host_profiler.h>
 
 #include <glad/glad.h>
 
@@ -142,6 +143,7 @@ struct RenderTarget {
 // the target's depth buffer, its size the target's (attached to its framebuffer; the framebuffer left bound)
 void render_target_depth(RenderTarget& r) {
     if (r.depth == 0) glGenRenderbuffers(1, &r.depth);
+    rac1::prof::gl_track_n(rac1::prof::kGlRenderbuffer, 1, &r.depth, "GS replica: render targets");
     glBindFramebuffer(GL_FRAMEBUFFER, r.fbo);
     if (r.depth_w != r.w || r.depth_h != r.h) {
         glBindRenderbuffer(GL_RENDERBUFFER, r.depth);
@@ -159,6 +161,7 @@ RenderTarget& render_target(uint32_t fbp, int w, int h) {
     if (r.fbo == 0) {
         glGenFramebuffers(1, &r.fbo);
         glGenTextures(1, &r.tex);
+        rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &r.tex, "GS replica: render targets");
     }
     r.w = w;
     r.h = h;
@@ -212,6 +215,7 @@ uint32_t texture_for(const Gs& gs, uint64_t tex0, uint64_t texa, const TexImage*
             for (int x = 0; x < tw; ++x) px[static_cast<size_t>(y) * tw + x] = gs.texel(tex0, texa, x, y);
     }
     if (e.id == 0) glGenTextures(1, &e.id);
+    rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &e.id, "GS replica: textures");
     glBindTexture(GL_TEXTURE_2D, e.id);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, tw, th, 0, GL_RGBA, GL_UNSIGNED_BYTE, img != nullptr ? img->px.data() : px.data());
     e.gen = ver;
@@ -335,6 +339,7 @@ void draw_init() {
     glUniform1i(glGetUniformLocation(g_prog, "uMip3"), 4);
     glGenVertexArrays(1, &g_vao);
     glGenBuffers(1, &g_vbo);
+    rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 1, &g_vbo, "GS replica: buffers");
     glBindVertexArray(g_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(V), reinterpret_cast<void*>(0));
@@ -887,6 +892,7 @@ void draw(const Gs& gs, int win_w, int win_h, float FB_W, float FB_H, const Dept
                 // window position its texture coordinates name (GS pixel -> window as the vertices)
                 if (g_screen_copy == 0 || g_screen_w != win_w || g_screen_h != win_h) {
                     if (g_screen_copy == 0) glGenTextures(1, &g_screen_copy);
+                    rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &g_screen_copy, "GS replica: screen copy");
                     g_screen_w = win_w;
                     g_screen_h = win_h;
                     glBindTexture(GL_TEXTURE_2D, g_screen_copy);

@@ -1,5 +1,6 @@
 // orig: (host) The MRP moby renderer (see mrp_moby_renderer.h).
 #include <game/render/mrp_moby_renderer.h>
+#include <profiler/host_profiler.h>
 
 #include <formats/moby_mrp.h>
 #include <game/boot/front_end.h>
@@ -588,6 +589,7 @@ void load_textures(Level& L) {
         while ((b.w >> maxl) > 0 && (b.h >> maxl) > 0 && maxl < b.levels) ++maxl;
         b.levels = std::max(1u, std::min(b.levels, maxl));
         glGenTextures(1, &b.tex);
+        rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &b.tex, "MRP mobys: texture arrays");
         glBindTexture(GL_TEXTURE_2D_ARRAY, b.tex);
         const GLsizei layers = static_cast<GLsizei>(b.textures.size());
         for (uint32_t l = 0; l < b.levels; ++l)
@@ -652,7 +654,9 @@ void load_level(int id) {
     load_textures(L);
     glGenVertexArrays(1, &L.vao);
     glGenBuffers(1, &L.vbo);
+    rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 1, &L.vbo, "MRP mobys: meshes");
     glGenBuffers(1, &L.ibo);
+    rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 1, &L.ibo, "MRP mobys: meshes");
     glBindVertexArray(L.vao);
     glBindBuffer(GL_ARRAY_BUFFER, L.vbo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, L.ibo);
@@ -1113,8 +1117,11 @@ bool init_gl() {
     glDeleteShader(fs);
     glDeleteShader(vs2);
     glGenBuffers(4, g_ssbo);
+    rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 4, g_ssbo, "MRP mobys: frame buffers");
     glGenBuffers(1, &g_indirect);
+    rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 1, &g_indirect, "MRP mobys: frame buffers");
     glGenBuffers(1, &g_tf_buf);
+    rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 1, &g_tf_buf, "MRP mobys: frame buffers");
     float aniso = 1.0f;
     glGetFloatv(kGlMaxAnisotropy, &aniso);
     for (int mm = 0; mm < 2; ++mm)
@@ -1966,6 +1973,7 @@ void draw_casters(const float* light_vp, const float* sphere, const float* withi
         }
         if (near.empty()) return;
         if (g_indirect_near == 0) glGenBuffers(1, &g_indirect_near);
+        rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 1, &g_indirect_near, "MRP mobys: frame buffers");
         glBindBuffer(kGlDrawIndirectBuffer, g_indirect_near);
         glBufferData(kGlDrawIndirectBuffer, static_cast<GLsizeiptr>(near.size() * sizeof(DrawCmd)), near.data(), GL_STREAM_DRAW);
     }
@@ -2563,7 +2571,9 @@ void mrp_moby_diff(int win_w, int win_h, const gs::Viewport* vp, const gs::Gs& g
             if (fbo[i] == 0) {
                 glGenFramebuffers(1, &fbo[i]);
                 glGenTextures(1, &tex[i]);
+                rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &tex[i], "MRP mobys: check targets (testing)");
                 glGenRenderbuffers(1, &rbo[i]);
+                rac1::prof::gl_track_n(rac1::prof::kGlRenderbuffer, 1, &rbo[i], "MRP mobys: check targets (testing)");
             }
             glBindTexture(GL_TEXTURE_2D, tex[i]);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, vw, vh, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);

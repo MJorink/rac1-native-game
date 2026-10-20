@@ -133,6 +133,7 @@
 #include "host_priority.h"
 #include "host_input.h"
 #include "sample_prof.h"
+#include "profiler/host_profiler.h"
 #include "sim_autopilot.h"
 #include "sim_script.h"
 #include "update_check.h"
@@ -619,6 +620,7 @@ struct FrozenFrame {
         if (fbo == 0) {
             glGenFramebuffers(1, &fbo);
             glGenTextures(1, &tex);
+            rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &tex, "Frame captures (menu, fades)");
         }
         if (cw != w || ch != h) {
             w = cw;
@@ -659,7 +661,9 @@ struct ScaledScene {
         if (fbo == 0) {
             glGenFramebuffers(1, &fbo);
             glGenTextures(1, &col);
+            rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &col, "Render scale buffer");
             glGenRenderbuffers(1, &dep);
+            rac1::prof::gl_track_n(rac1::prof::kGlRenderbuffer, 1, &dep, "Render scale buffer");
         }
         if (bw != w || bh != h) {
             w = bw;
@@ -739,6 +743,7 @@ struct ScenePicture {
         if (rb_fbo == 0) {
             glGenFramebuffers(1, &rb_fbo);
             glGenTextures(1, &rb_tex);
+            rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &rb_tex, "Frame captures (menu, fades)");
         }
         if (rb_w != w || rb_h != h) {
             rb_w = w;
@@ -776,7 +781,9 @@ struct ScenePicture {
         if (pf_fbo == 0) {
             glGenFramebuffers(1, &pf_fbo);
             glGenTextures(1, &pf_tex);
+            rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &pf_tex, "Frame captures (menu, fades)");
             glGenBuffers(1, &pf_pbo);
+            rac1::prof::gl_track_n(rac1::prof::kGlBuffer, 1, &pf_pbo, "Frame captures (menu, fades)");
         }
         if (pf_w != w || pf_h != h) {
             pf_w = w;
@@ -887,6 +894,7 @@ struct MoviePicture {
         if (fbo == 0) {
             glGenFramebuffers(1, &fbo);
             glGenTextures(1, &tex);
+            rac1::prof::gl_track_n(rac1::prof::kGlTexture, 1, &tex, "Movie picture");
         }
         glBindTexture(GL_TEXTURE_2D, tex);
         if (pw != w || ph != h) {
@@ -2168,6 +2176,8 @@ int main(int argc, char** argv) {
     };
     while (running && !glfwWindowShouldClose(window)) {
         ++run_host_frames;
+        rac1::prof::frame_mark();  // (the debug menu's profiler: the frame before ends, this one starts)
+        int prof_events = rac1::prof::begin(rac1::prof::kEvents);
         glfwPollEvents();
         if (!headless) {  // Options > Graphics: the window's settings changed there applied now; the window as it is reported
             const bool is_fs = glfwGetWindowMonitor(window) != nullptr;
@@ -2270,6 +2280,9 @@ int main(int argc, char** argv) {
         fprof.begin();
         fprof.steps(steps);
         sample_prof_frame(frame);
+        rac1::prof::end(prof_events);
+        rac1::prof::frame_steps(steps);
+        int prof_game = rac1::prof::begin(rac1::prof::kGameFrames);
         for (int k = 0; k < steps && running; ++k) {
             g_mrp_lod_frame_drawn = k == steps - 1;  // (only the last game frame of the host frame is drawn)
             pad_packet(headless ? nullptr : window, game_frame);
@@ -2280,7 +2293,10 @@ int main(int argc, char** argv) {
             }
 #endif
             const auto t0 = std::chrono::steady_clock::now();
-            audio_out_step(true);  // (the IOP's mirror plays alone only while the game's thread is stuck inside a step: a stall)
+            {
+                RAC1_PROF_ZONE(kAudioStep);
+                audio_out_step(true);  // (the IOP's mirror plays alone only while the game's thread is stuck inside a step: a stall)
+            }
             render_view_projection_undo();  // (the game's own projection back before its update: its state is a 4:3 run's)
             {  // the MRP skips what only the GS / VU1 path needs: asked
                // before the update, for a frame the MRP will draw (not the title, the level exit, a movie, the debug diffs)
@@ -2316,6 +2332,7 @@ int main(int argc, char** argv) {
             // 0x1f9838) suspends it, this host frame shows that frame and the next one resumes it (the lambda not called again)
             if (!ee_thread_suspended()) g_mode_at_update = boot_active() ? -100 : lw(OV(0x0015f5c4));
             rac1::host_language::note(lwu(0x0015ed88));  // (a language chosen in the game: kept as the console's)
+            const int prof_code = rac1::prof::begin(rac1::prof::kGameCode);
             ee_thread_run([&] {
                 if (exiting) {  // the level exit's loops (the loading screen, the load), then the new level
                     static uint64_t flight_frames = 0, flight_first = 0;  // (the frames the loading screen's flight was drawn)
@@ -2344,6 +2361,7 @@ int main(int argc, char** argv) {
                     }
                 }
             });
+            rac1::prof::end(prof_code);
             if (rac1::update_check::update_requested()) running = false;
 #ifdef RAC1_DEVTOOLS
             if (!headless) dt::dev_menu_game_frame();
@@ -2357,7 +2375,10 @@ int main(int argc, char** argv) {
                 if (ramhash != nullptr) ram_hash_frame(ramhash, game_frame);
                 ++game_frame;
             }
-            audio_out_step(false);
+            {
+                RAC1_PROF_ZONE(kAudioStep);
+                audio_out_step(false);
+            }
             const double step_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
             update_ms += step_ms;
             g_last_steps_ms = std::max(g_last_steps_ms, step_ms);
@@ -2401,6 +2422,7 @@ int main(int argc, char** argv) {
             was_suspended = ee_thread_suspended();
             if (ee_thread_suspended()) break;  // (a blocking loop's frame: shown before the game goes on, ADR 0012)
         }
+        rac1::prof::end(prof_game);
         // a host frame that ran no game frame (it came sooner than 1/60 s: a jitter in the host's timing, a faster display)
         // shows nothing new: not prepared nor drawn again (the picture on the screen stays), the host waits for the next game
         // frame instead. A frame prepared twice without the game's update between went wrong: the projection's widening
@@ -2485,6 +2507,7 @@ int main(int argc, char** argv) {
         int w, h;
         fprof.mark(0);
         auto prepare = [&](FrameDraw& fd, bool snapshot) {
+            RAC1_PROF_ZONE(kPrepare);
             glfwGetFramebufferSize(window, &fd.w, &fd.h);
             if (test_zero_fb(frame)) fd.w = fd.h = 0;  // (testing: RAC1_TEST_ZERO_FB with raw)
             w = fd.w;
@@ -2519,6 +2542,7 @@ int main(int argc, char** argv) {
             // the game's own GS packets of the frame (its DMA chain in the packet buffer: the 2D, the texture uploads) on the GS subset,
             // drawn over the 3D
             auto chain_stage = [&]() {
+                RAC1_PROF_ZONE(kChainCapture);
                 rac1::gs::chain_join();  // (the previous chain's run ended)
                 rac1::gs::Gs& gs = rac1::gs::gs_global();
                 gs.reset_frame();
@@ -2652,6 +2676,7 @@ int main(int argc, char** argv) {
                 chain_end_r = end;
             };
             {  // the MRP world: the frame's chain decoded on a frame whose world is drawn (else nothing: no skipping)
+                RAC1_PROF_ZONE(kChainCapture);
                 const uint32_t ci = lwu(OV(0x001611d0));
                 const uint32_t cs = lwu(OV(0x001611b8) + (ci & 1) * 4), ce = lwu(OV(0x001611c0));
                 // (the scene's inputs captured, its build started on the worker thread while this thread runs the GS replica's chain)
@@ -2706,6 +2731,7 @@ int main(int argc, char** argv) {
                 render_view_snapshot();
                 mrp_lod_snapshot();
                 mrp_shadows_snapshot();
+                RAC1_PROF_ZONE(kMobyLists);
                 if (mrp_moby_active()) mrp_moby_prepare(&fd.gv);
             }
             // (the scene's inputs captured on the worker meanwhile: the game's state is written again only after this)
@@ -2914,6 +2940,7 @@ int main(int argc, char** argv) {
             }
         };
         auto draw = [&](FrameDraw& fd) {
+            RAC1_PROF_ZONE(kDraw);
             w = fd.w;
             h = fd.h;
             const int vx = fd.vx, vy = fd.vy, vw = fd.vw, vh = fd.vh;
@@ -2940,6 +2967,7 @@ int main(int argc, char** argv) {
                     wv.x = vx; wv.y = vy; wv.w = vw; wv.h = vh;
                     wv.xscale = 1.0f / g_view_widen;
                     wv.xscale_3d = 1.0f;
+                    RAC1_PROF_ZONE(kWorld);
                     mrp_world_draw(w, h, &wv);
                 } else if (g_title_scene_host) {  // (RAC1_TITLE_HOST=1) the old host renderers
                     title_scene_host_draw();
@@ -2962,8 +2990,12 @@ int main(int argc, char** argv) {
                         wv = g_scaled_scene.scaled(wv);
                         glViewport(wv.x, wv.y, wv.w, wv.h);
                     }
-                    if (mrp_moby_active()) mrp_moby_prepare(&fd.gv);  // (the modern lighting: the mobys cast too)
+                    {
+                        RAC1_PROF_ZONE(kMobyLists);
+                        if (mrp_moby_active()) mrp_moby_prepare(&fd.gv);  // (the modern lighting: the mobys cast too)
+                    }
                     mrp_lighting_shadow_pass();
+                    RAC1_PROF_ZONE(kWorld);
                     mrp_world_draw(w, h, &wv);
                 } else if (!g_world_faithful) {
                     tfrag_render_update();  // (g_world_faithful: the world comes from the frame's VU1 chain)
@@ -2981,7 +3013,10 @@ int main(int argc, char** argv) {
             // the mobys: the host's model drawer, or the original pass (g_moby_vu1_pass: debug menu,
             // RAC1_MOBY_VU1; ADR 0007) drawing through the GS; the exit's cards and movies draw no 3D
             // (the moby list left is not drawn)
-            if (g_render_moby && !g_moby_vu1_pass && movie_pic == nullptr && !story && !title && !fd.fade && !fd.vendor_pic) orig_moby_draw();
+            if (g_render_moby && !g_moby_vu1_pass && movie_pic == nullptr && !story && !title && !fd.fade && !fd.vendor_pic) {
+                RAC1_PROF_ZONE(kMobysLegacy);
+                orig_moby_draw();
+            }
             fprof.mark(2);
             if (menu_cut) glDisable(GL_SCISSOR_TEST);
             fprof.mark(3);
@@ -3017,10 +3052,13 @@ int main(int argc, char** argv) {
                     if (mark != SIZE_MAX && mark > 0) {
                         const rac1::gs::Viewport pv = g_scaled_scene.on ? g_scaled_scene.scaled(gv) : gv;
                         if (gs.fx_external()) {
+                            RAC1_PROF_ZONE(kEffects);
                             mrp_fx_draw(gs, w, h, &pv, [&](size_t from, size_t to) {
+                                RAC1_PROF_ZONE(kGs2d);
                                 rac1::gs::draw(gs, w, h, fd.fb_w, fd.fb_h, has_dm ? &dm : nullptr, &pv, prim_filt, from, to);
                             }, 0, mark);
                         } else {
+                            RAC1_PROF_ZONE(kGs2d);
                             rac1::gs::draw(gs, w, h, fd.fb_w, fd.fb_h, has_dm ? &dm : nullptr, &pv, prim_filt, 0, mark);
                         }
                         pre_moby = mark;
@@ -3029,6 +3067,7 @@ int main(int argc, char** argv) {
                 if (mrp_moby_active()) {  // the MRP's mobys (with RAC1_MRP_DIFF: first both renderers' offscreen, compared)
                     if (s_mrp_diff) mrp_moby_diff(w, h, &gv, gs, fd.fb_w, fd.fb_h, fd.frame, has_dm ? &dm : nullptr);
                     if (g_render_moby) {
+                        RAC1_PROF_ZONE(kMobys);
                         mrp_lighting_ao_moby_mark(true);  // (their pixels marked for the ambient occlusion: gentler on them; nothing unless it is on)
                         if (g_scaled_scene.on) {  // (the render scale's buffer, its viewport)
                             const rac1::gs::Viewport sgv = g_scaled_scene.scaled(gv);
@@ -3051,6 +3090,7 @@ int main(int argc, char** argv) {
                 }
                 mrp_lighting_ao_pass();  // (the ambient occlusion over the 3D, before the effects and the 2D; nothing unless asked)
                 if (g_scaled_scene.on) {  // the scaled 3D on the window; the effects and the 2D drawn over it at the window's resolution
+                    RAC1_PROF_ZONE(kScaleResolve);
                     g_scaled_scene.end(w, h);
                     glViewport(vx, vy, vw, vh);
                 }
@@ -3089,15 +3129,19 @@ int main(int argc, char** argv) {
                 fprof.mark(5);
                 // (the MRP's 3D effects in the primitives' order, the GS replica's runs between them; those before the moby pass drawn above)
                 if (gs.fx_external() && movie_pic == nullptr && !fd.fade_held) {
+                    RAC1_PROF_ZONE(kEffects);
                     mrp_fx_draw(gs, w, h, &gv, [&](size_t from, size_t to) {
+                        RAC1_PROF_ZONE(kGs2d);
                         if (g_render_gs2d) rac1::gs::draw(gs, w, h, fd.fb_w, fd.fb_h, has_dm ? &dm : nullptr, &gv, prim_filt, from, to);
                     }, pre_moby);
                 } else if (g_render_gs2d && movie_pic == nullptr && !fd.fade_held) {
+                    RAC1_PROF_ZONE(kGs2d);
                     rac1::gs::draw(gs, w, h, fd.fb_w, fd.fb_h, has_dm ? &dm : nullptr, &gv, prim_filt, pre_moby);
                 }
                 glViewport(0, 0, w, h);
                 fprof.mark(6);
             }
+            const int prof_capture = rac1::prof::begin(rac1::prof::kFrameCapture);
             if (!menu_mode && !fd.fade && !fd.vendor_pic && !title && movie_pic == nullptr && !fd.exiting) {
                 // the last frame of the game shown: what the frame buffer holds when the pause menu's start stores it (the
                 // frame drawn when the menu opens is the gameplay chain drawn as a menu frame here: not that one)
@@ -3117,11 +3161,16 @@ int main(int argc, char** argv) {
                 g_scene_pic.keep(w, h, vx, vy, vw, vh);  // (the picture the game stores after this frame)
                 g_scene_pic.prefetch(g_scene_pic.pic, vx, vy, vw, vh);
             }
+            rac1::prof::end(prof_capture);
 #ifdef RAC1_DEVTOOLS
-            if (!headless || menu_shot) dt::dev_menu_draw(update_shown, frame_ms);
+            if (!headless || menu_shot) {
+                RAC1_PROF_ZONE(kDebugMenu);
+                dt::dev_menu_draw(update_shown, frame_ms);
+            }
 #endif
             const uint64_t shown = fd.frame;  // (the game frame this picture is)
         if (const char* shots = std::getenv("RAC1_SHOTS")) {  // testing: screenshots at the frames listed
+                RAC1_PROF_ZONE(kScreenshots);
                 for (const char* q = shots; *q != 0;) {
                     char* e;
                     const unsigned long f = std::strtoul(q, &e, 10);
@@ -3185,6 +3234,7 @@ int main(int argc, char** argv) {
         } else {
             if (presented) {  // (two pictures this host frame: the pipelined one shown first)
                 fprof.mark(7);
+                RAC1_PROF_ZONE(kPresent);
                 glfwSwapBuffers(window);
             }
             draw(cur);
@@ -3244,11 +3294,18 @@ int main(int argc, char** argv) {
             static const bool wayland = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND;
             if (cap <= 0 && vsync && wayland) pace_hz = host_refresh_hz(window);  // (no swap interval there: the display's rate)
         }
-        if (!headless || env_fps_cap > 0) pacer.wait(pace_hz);  // (a headless run paced only when RAC1_FPS_CAP asks: testing the audio at 60 fps)
-        glfwSwapBuffers(window);
+        {
+            RAC1_PROF_ZONE(kPacing);
+            if (!headless || env_fps_cap > 0) pacer.wait(pace_hz);  // (a headless run paced only when RAC1_FPS_CAP asks: testing the audio at 60 fps)
+        }
+        {
+            RAC1_PROF_ZONE(kPresent);
+            glfwSwapBuffers(window);
+        }
         fprof.mark(8);
         fprof.end_frame();
         if (!headless && pacer.legacy) {
+            RAC1_PROF_ZONE(kPacing);
             if (cap > 0) {
                 const auto period = std::chrono::nanoseconds(1000000000LL / cap);
                 next += period;
@@ -3262,6 +3319,7 @@ int main(int argc, char** argv) {
     }
     pace_report();
     sample_prof_stop();
+    rac1::prof::shutdown();
     fprof.report();
     if (fprof.on && !pacer.legacy)
         std::printf("[prof] pacing: %llu frames late for their slot, %llu re-anchored\n", static_cast<unsigned long long>(pacer.late),

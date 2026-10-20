@@ -5,6 +5,7 @@
 #include <runtime/gs/gs_emu.h>
 
 #include <runtime/kernel/ee_memory.h>
+#include <profiler/host_profiler.h>
 
 #include <algorithm>
 #include <condition_variable>
@@ -1041,6 +1042,7 @@ struct ChainWorker {
             job = false;
             lk.unlock();
             try {
+                const rac1::prof::Job prof_job(rac1::prof::kWorkerChain);  // (the debug menu's profiler: the job's time)
                 gs_global().vif1_chain(*cap);
             } catch (...) {
                 error = std::current_exception();
@@ -1065,7 +1067,10 @@ void chain_start_async(const Gs::ChainCapture& c) {
     ChainWorker& w = g_chain_worker;
     chain_join();
     std::lock_guard<std::mutex> lk(w.m);
-    if (!w.th.joinable()) w.th = std::thread([&w] { w.loop(); });
+    if (!w.th.joinable()) w.th = std::thread([&w] {
+        rac1::prof::thread_name("GS chain worker");
+        w.loop();
+    });
     w.cap = &c;
     w.error = nullptr;
     w.busy = true;
@@ -1074,6 +1079,7 @@ void chain_start_async(const Gs::ChainCapture& c) {
 }
 
 void chain_join() {
+    RAC1_PROF_ZONE(kChainJoinWait);
     ChainWorker& w = g_chain_worker;
     std::unique_lock<std::mutex> lk(w.m);
     w.cv.wait(lk, [&w] { return !w.busy; });
