@@ -175,7 +175,7 @@ namespace Rac1Launcher
 
     static class GitHub
     {
-        public const string Repo = "daino-selvatico/rac1-native-game";
+        public const string Repo = "RAC-Native/rac1-native-game";
         public const string Api = "https://api.github.com/repos/" + Repo;
         public const string Page = "https://github.com/" + Repo;
 

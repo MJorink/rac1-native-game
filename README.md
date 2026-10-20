@@ -117,7 +117,7 @@ You need Linux (or Windows, [experimental](#windows-support-is-experimental)), a
 ISO of the game (the North American or the European PAL disc).
 
 ```bash
-git clone https://github.com/daino-selvatico/rac1-native-game.git
+git clone https://github.com/RAC-Native/rac1-native-game.git
 cd rac1-native-game
 ./setup.sh --iso /path/to/your/ratchet.iso
 ```
@@ -132,7 +132,7 @@ game's code from it, builds the game and generates the game's data. Run it again
 The full guide, with requirements and troubleshooting: [Setup](docs/setup.md).
 **The easiest way, on Windows and Linux, is the launcher**: download `rac1-launcher.exe` (Windows) or
 `rac1-launcher-linux-x64` (Linux) from the
-[latest release](https://github.com/daino-selvatico/rac1-native-game/releases/latest), open it, click
+[latest release](https://github.com/RAC-Native/rac1-native-game/releases/latest), open it, click
 **Install** and choose your disc image. It downloads the game, builds it, keeps it up to date and
 manages your saves: see [The launcher](docs/launcher.md). On Windows without the launcher, run
 `setup.cmd` from the repository's folder, then play with `play.cmd`: see

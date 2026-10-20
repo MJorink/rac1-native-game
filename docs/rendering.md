@@ -224,7 +224,7 @@ skips anything there (the passes noted last were an older frame's, and skipped t
 The atlas holds at most 1024 layers (fewer if the GPU allows fewer array layers); when it is full, the
 layer least recently drawn with is reused. Some effects get new texture pixels every frame (Aridia's
 sand sea), so an atlas that only grew reached the GPU's limit after about half a minute there, and every
-effect then lost its texture ([issue #19](https://github.com/daino-selvatico/rac1-native-game/issues/19)).
+effect then lost its texture ([issue #19](https://github.com/RAC-Native/rac1-native-game/issues/19)).
 
 ## Level of detail
 

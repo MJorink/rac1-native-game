@@ -57,7 +57,7 @@ sudo pacman -S --needed cmake base-devel pkgconf mesa libx11 libxrandr libxinera
 1. **Clone the repository:**
 
    ```bash
-   git clone https://github.com/daino-selvatico/rac1-native-game.git
+   git clone https://github.com/RAC-Native/rac1-native-game.git
    cd rac1-native-game
    ```
 

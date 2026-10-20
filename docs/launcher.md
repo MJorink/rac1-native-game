@@ -4,7 +4,7 @@ The launcher is the easy way to get the game: one file to download and open, wit
 first. It downloads the game, sets it up from your own disc image, keeps it up to date, starts it,
 and manages your saves.
 
-It is attached to each [release](https://github.com/daino-selvatico/rac1-native-game/releases):
+It is attached to each [release](https://github.com/RAC-Native/rac1-native-game/releases):
 
 | System | File | Needs |
 |---|---|---|

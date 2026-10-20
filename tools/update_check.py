@@ -40,7 +40,7 @@ import unicodedata
 import urllib.request
 from pathlib import Path
 
-REPO = "daino-selvatico/rac1-native-game"
+REPO = "RAC-Native/rac1-native-game"
 API = "https://api.github.com"
 TIMEOUT = 10  # seconds, the connection and each read
 NOTES_MAX = 120  # characters of the release notes kept (the menu's help box scrolls slowly)

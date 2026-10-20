@@ -813,7 +813,7 @@ def game_env():
 
 # --- 6. Updating (--update, GitHub issue #13) ---------------------------------------------------
 
-REPO = "daino-selvatico/rac1-native-game"
+REPO = "RAC-Native/rac1-native-game"
 GITHUB_API = f"https://api.github.com/repos/{REPO}"
 GITHUB_ZIP = f"https://github.com/{REPO}/archive/refs"
 UPDATE_VERSION_FILE = ASSETS_DIR / "update-version.txt"

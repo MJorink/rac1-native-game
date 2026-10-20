@@ -139,7 +139,7 @@ commits there are on `main`), the release notes in short, and three choices:
 Details:
 
 - **What is sent:** one anonymous HTTPS request to the GitHub API (`api.github.com`), for this
-  repository only: `GET /repos/daino-selvatico/rac1-native-game/releases/latest` (Stable), or the
+  repository only: `GET /repos/RAC-Native/rac1-native-game/releases/latest` (Stable), or the
   comparison of the installed build with `main` (Development). Nothing else: no identifier, no
   telemetry, nothing about the player or the machine (GitHub sees the request's IP address, as for any
   web request). The answer is kept for 6 hours in `update_check.txt` (in the settings' folder below):
