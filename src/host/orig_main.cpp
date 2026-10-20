@@ -353,7 +353,8 @@ static void ram_hash_frame(FILE* f, uint64_t frame) {
 // then presents: the swaps come 1/60 s apart to within ~0.1 ms whatever the work took, as long as it fit.
 // - The slot: 1 / cap s; with the game running at speed 1 the host frames are paced at the game's 60 a second whatever the
 //   cap above it (a host frame with no game frame shows the same game state again: it only cost CPU and broke the steps'
-//   cadence: 1 0 1 1 0 ...). The debug menu's pause / an open menu with the game held: the cap as set. Cap 0: unlimited.
+//   cadence: 1 0 1 1 0 ...); the cap 0 (Unlimited) too. The debug menu's pause / an open menu with the game held: the cap as
+//   set, 0 unlimited.
 // - A frame late by more than half a slot is presented at once and the slots restart from it (no burst of short frames
 //   catching up); late by less: presented at once, the slots kept.
 // - RAC1_PACING=0: the old way (the swap, then the cap's sleep), for comparison; RAC1_PACE_GAME=0: the cap as set.
@@ -361,9 +362,38 @@ static void ram_hash_frame(FILE* f, uint64_t frame) {
 // an interval of 0), and an interval of 1 makes eglSwapBuffers wait for the compositor's frame callback, which it does not send
 // to a window it does not show (another workspace, minimised, covered): the game's thread then stops in the swap - the game and
 // its sound with it - until the window is seen again. So on Wayland the swap never waits and the frames are paced by
-// HostPacer (VSync on with no frame-rate cap: paced at the display's refresh); elsewhere VSync is the swap interval 1.
+// HostPacer (the game running: its 60 a second; held by the debug menu with VSync on and no cap: the display's refresh);
+// elsewhere VSync is the swap interval 1.
 // orig: (host)
 static int host_swap_interval(bool vsync) { return vsync && glfwGetPlatform() != GLFW_PLATFORM_WAYLAND ? 1 : 0; }
+// orig: (host) the VSync setting applied: the swap interval set, and in the log what it became - the platform, the
+// driver's swap control (an interval of 0 needs GLX_EXT / GLX_MESA_swap_control or WGL_EXT_swap_control; EGL's
+// eglSwapInterval always takes it) and Mesa's vblank_mode when set (0 forces the interval 0, 3 forces 1). What
+// the swaps then do is measured a few seconds later: the "[display] presents" line (HostPresents).
+static void host_apply_swap_interval(bool vsync, const char* why) {
+    const int interval = host_swap_interval(vsync);
+    glfwSwapInterval(interval);
+    const int plat = glfwGetPlatform();
+    const char* name = "other";
+    const char* control = "?";
+    if (plat == GLFW_PLATFORM_WAYLAND) {
+        name = "Wayland (EGL)";
+        control = "eglSwapInterval";
+    } else if (plat == GLFW_PLATFORM_X11) {
+        name = "X11 (GLX)";
+        control = glfwExtensionSupported("GLX_EXT_swap_control")    ? "GLX_EXT_swap_control"
+                  : glfwExtensionSupported("GLX_MESA_swap_control") ? "GLX_MESA_swap_control"
+                  : glfwExtensionSupported("GLX_SGI_swap_control")  ? "GLX_SGI_swap_control only (no interval 0)"
+                                                                     : "none";
+    } else if (plat == GLFW_PLATFORM_WIN32) {
+        name = "Windows (WGL)";
+        control = glfwExtensionSupported("WGL_EXT_swap_control") ? "WGL_EXT_swap_control" : "none";
+    }
+    const char* vblank = std::getenv("vblank_mode");
+    std::printf("[display] %s: V-Sync %s, swap interval %d on %s (swap control: %s)%s%s%s\n", why, vsync ? "on" : "off", interval, name, control,
+                vblank != nullptr ? ", vblank_mode=" : "", vblank != nullptr ? vblank : "",
+                plat == GLFW_PLATFORM_WAYLAND ? "; on Wayland the compositor shows whole frames: no tearing either way" : "");
+}
 // orig: (host) the monitor the Graphics page's Monitor row chose (an index in GLFW's list), else the primary
 // monitor, which on Wayland is only the first output the compositor advertises
 static GLFWmonitor* host_fullscreen_monitor() {
@@ -432,6 +462,49 @@ struct HostPacer {
         }
         if (next - now > std::chrono::microseconds(1000)) std::this_thread::sleep_until(next - std::chrono::microseconds(500));
         while (clk::now() < next) std::this_thread::yield();
+    }
+};
+
+// The window's presents measured: the "[display] presents" line, from 1 s to 5 s after the start and after each change of
+// the display settings - the pictures shown a second, the time between them (median, 5th and 95th percentile) and how long
+// the swap waited (a swap that waits about a refresh each time: V-Sync in effect, the driver's or the compositor's, whatever
+// the swap interval asked). Also the stats overlay's rate: present to present, not the host loop's turns (a turn that runs
+// no new game frame presents nothing, and counted as a frame it doubled the rate shown: 120 for 60 pictures a second).
+// orig: (host)
+struct HostPresents {
+    using clk = std::chrono::steady_clock;
+    bool on = true;  // (a window's run, or a headless RAC1_REALTIME one)
+    clk::time_point t0 = clk::now(), last{};
+    bool have_last = false, reported = false;
+    std::vector<double> gaps, waits;
+    double ema_ms = 1000.0 / 60.0;
+    void restart() {
+        t0 = clk::now();
+        gaps.clear();
+        waits.clear();
+        reported = false;
+    }
+    void swap(GLFWwindow* w) {
+        const auto a = clk::now();
+        glfwSwapBuffers(w);
+        const auto b = clk::now();
+        if (have_last) ema_ms = ema_ms * 0.9 + std::chrono::duration<double, std::milli>(b - last).count() * 0.1;
+        const double since = std::chrono::duration<double>(b - t0).count();
+        if (on && !reported && since >= 1.0) {
+            if (have_last && last >= t0 + std::chrono::seconds(1)) gaps.push_back(std::chrono::duration<double, std::milli>(b - last).count());
+            waits.push_back(std::chrono::duration<double, std::milli>(b - a).count());
+            if (since >= 5.0 && !gaps.empty()) {
+                reported = true;
+                std::vector<double> g = gaps;
+                std::sort(g.begin(), g.end());
+                double wsum = 0, wmax = 0;
+                for (double x : waits) wsum += x, wmax = std::max(wmax, x);
+                std::printf("[display] presents: %.1f a second; between them median %.2f ms, p5 %.2f, p95 %.2f; the swap waited %.2f ms mean, %.2f max\n",
+                            static_cast<double>(waits.size()) / (since - 1.0), g[g.size() / 2], g[g.size() * 5 / 100], g[g.size() * 95 / 100], wsum / static_cast<double>(waits.size()), wmax);
+            }
+        }
+        last = b;
+        have_last = true;
     }
 };
 
@@ -1790,7 +1863,6 @@ int main(int argc, char** argv) {
     if (window == nullptr) { std::fprintf(stderr, "rac1-native: no OpenGL 4.6 window\n"); return 1; }
     glfwMakeContextCurrent(window);
     if (!headless && fs_monitor == nullptr) host_window_on_monitor(window, rac1::graphics_display().monitor);
-    glfwSwapInterval(headless ? 0 : host_swap_interval(rac1::graphics_display().vsync));
     if (!headless) host_input_init(window);  // the controls: the controller database, the bindings
     // the Controls page's host side; its changes saved in a window, headless only to an explicit RAC1_CONTROLS_FILE
     g_controls_save = !headless || std::getenv("RAC1_CONTROLS_FILE") != nullptr;
@@ -1798,7 +1870,8 @@ int main(int argc, char** argv) {
     rac1::controls_set_host(&g_host_controls);
     const int env_vsync = std::getenv("RAC1_VSYNC") != nullptr ? std::atoi(std::getenv("RAC1_VSYNC")) : -1;
     const int env_fps_cap = std::getenv("RAC1_FPS_CAP") != nullptr ? std::atoi(std::getenv("RAC1_FPS_CAP")) : -1;
-    if (env_vsync >= 0 && !headless) glfwSwapInterval(host_swap_interval(env_vsync != 0));
+    if (headless) glfwSwapInterval(0);
+    else host_apply_swap_interval(env_vsync >= 0 ? env_vsync != 0 : rac1::graphics_display().vsync, env_vsync >= 0 ? "start (RAC1_VSYNC)" : "start");
     if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) { std::fprintf(stderr, "rac1-native: GL load failed\n"); return 1; }
     if (!ShaderManager::get().init()) { std::fprintf(stderr, "rac1-native: shaders failed\n"); return 1; }
     sample_prof_start();  // (testing: RAC1_SAMPLE_PROF=<file>, see sample_prof.h)
@@ -2117,7 +2190,6 @@ int main(int argc, char** argv) {
     auto last = std::chrono::steady_clock::now();
     auto next = last;
     double game_time = 0.0;  // game frames owed (60 a second at speed 1)
-    double frame_ms = 16.6;
     uint64_t frame = 0;       // game frame passes run (a blocking loop's frame shown with "Original fades" is one)
     uint64_t game_frame = 0;  // game frames ended: what the testing scripts (RAC1_SIM_INPUT, RAC1_GOTO, RAC1_RAMHASH) count
     double update_ms = 0.0, update_shown = 0.0;
@@ -2155,6 +2227,8 @@ int main(int argc, char** argv) {
     }
     FrameProf fprof;
     HostPacer pacer;
+    HostPresents presents;
+    presents.on = !headless || (std::getenv("RAC1_REALTIME") != nullptr && std::atoi(std::getenv("RAC1_REALTIME")) != 0);
     // (testing) RAC1_RAMHASH=<file>: after each game frame's update the 4 KB pages' hashes of the game's EE RAM
     // (32 MB) and the scratchpad are appended to the file; RAC1_RAMDUMP=<frame>,<file>: that frame's RAM + scratchpad raw
     FILE* ramhash = std::getenv("RAC1_RAMHASH") ? std::fopen(std::getenv("RAC1_RAMHASH"), "wb") : nullptr;
@@ -2202,7 +2276,8 @@ int main(int argc, char** argv) {
                     if (cw != gd.window_w || ch != gd.window_h) glfwSetWindowSize(window, gd.window_w, gd.window_h);
                     host_window_on_monitor(window, gd.monitor);  // (the Monitor row: the window over on that screen)
                 }
-                glfwSwapInterval(host_swap_interval(env_vsync >= 0 ? env_vsync != 0 : gd.vsync));
+                host_apply_swap_interval(env_vsync >= 0 ? env_vsync != 0 : gd.vsync, "display settings changed");
+                presents.restart();  // (what the swaps do now: measured again)
             } else if (display_settle > 0) {
                 --display_settle;
             } else {
@@ -2223,7 +2298,6 @@ int main(int argc, char** argv) {
         const auto now0 = std::chrono::steady_clock::now();
         const double dt_s = std::chrono::duration<double>(now0 - last).count();
         last = now0;
-        frame_ms = frame_ms * 0.9 + dt_s * 1000.0 * 0.1;
         // the game frames of this host frame: one in headless runs (deterministic tests); else
         // 60 a second (times the debug menu's speed), paused or single-stepped from the menu
         int steps = 1;
@@ -2429,7 +2503,7 @@ int main(int argc, char** argv) {
         // frame instead. A frame prepared twice without the game's update between went wrong: the projection's widening
         // (undone before each update, render_view_projection_undo) applied twice - the title's scene drawn in a wrong view,
         // its menu's frames gone, for that one frame (a flicker, on Windows above all)
-        if (steps == 0 && !host_paused && !headless) {
+        if (steps == 0 && !host_paused && (!headless || realtime_test)) {  // (RAC1_REALTIME: as a window does)
             const double wait_s = std::max(0.0, 0.5 - game_time) / 60.0;  // (the next game frame is due when game_time reaches 0.5)
             std::this_thread::sleep_for(std::chrono::duration<double>(std::max(wait_s, 0.001)));
             fprof.end_frame();
@@ -3169,7 +3243,7 @@ int main(int argc, char** argv) {
 #ifdef RAC1_DEVTOOLS
             if (!headless || menu_shot) {
                 RAC1_PROF_ZONE(kDebugMenu);
-                dt::dev_menu_draw(update_shown, frame_ms);
+                dt::dev_menu_draw(update_shown, presents.ema_ms);
             }
 #endif
             const uint64_t shown = fd.frame;  // (the game frame this picture is)
@@ -3239,7 +3313,7 @@ int main(int argc, char** argv) {
             if (presented) {  // (two pictures this host frame: the pipelined one shown first)
                 fprof.mark(7);
                 RAC1_PROF_ZONE(kPresent);
-                glfwSwapBuffers(window);
+                presents.swap(window);
             }
             draw(cur);
             presented = true;
@@ -3293,18 +3367,23 @@ int main(int argc, char** argv) {
             }
 #endif
             pace_hz = static_cast<double>(cap);
+            // the game running: its 60 frames a second (times the debug menu's speed) are the most there is to show, whatever
+            // the cap above it - Unlimited too: the host frames past them show no new picture (not presented, see "a host frame
+            // that ran no game frame"), and without a slot the presents came at the end of each frame's variable work (the
+            // jitter HostPacer removes: 3 or 5 refreshes of a 240 Hz display for one game frame)
             static const bool pace_game = std::getenv("RAC1_PACE_GAME") == nullptr || std::atoi(std::getenv("RAC1_PACE_GAME")) != 0;
-            if (pace_game && cap > 0 && !game_held && speed >= 1.0) pace_hz = std::min(pace_hz, 60.0 * speed);
+            if (pace_game && !game_held && speed >= 1.0) pace_hz = cap > 0 ? std::min(pace_hz, 60.0 * speed) : 60.0 * speed;
             static const bool wayland = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND;
-            if (cap <= 0 && vsync && wayland) pace_hz = host_refresh_hz(window);  // (no swap interval there: the display's rate)
+            if (pace_hz <= 0.0 && vsync && wayland) pace_hz = host_refresh_hz(window);  // (no swap interval there: the display's rate; the game held, cap Unlimited)
         }
         {
             RAC1_PROF_ZONE(kPacing);
-            if (!headless || env_fps_cap > 0) pacer.wait(pace_hz);  // (a headless run paced only when RAC1_FPS_CAP asks: testing the audio at 60 fps)
+            // (a headless run paced only when RAC1_FPS_CAP asks: testing the audio at 60 fps; RAC1_REALTIME with RAC1_FPS_CAP=0: as a window with the cap Unlimited)
+            if (!headless || env_fps_cap > 0 || (realtime_test && env_fps_cap == 0)) pacer.wait(pace_hz);
         }
         {
             RAC1_PROF_ZONE(kPresent);
-            glfwSwapBuffers(window);
+            presents.swap(window);
         }
         fprof.mark(8);
         fprof.end_frame();
