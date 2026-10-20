@@ -13,6 +13,22 @@
 #include <utility>
 #include <vector>
 
+namespace {
+// (host, the VU profiler's counters) a cheap tick count: x86's time-stamp counter, AArch64's virtual counter, else the
+// steady clock (the counters compare ticks with ticks, never with seconds)
+inline uint64_t prof_ticks() {
+#if defined(__x86_64__) || defined(__i386__)
+    return __builtin_ia32_rdtsc();
+#elif defined(__aarch64__)
+    uint64_t t;
+    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(t));
+    return t;
+#else
+    return static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+#endif
+}
+}  // namespace
+
 namespace rac1::vu0 {
 
 namespace {
@@ -296,9 +312,9 @@ void run_until_blocked() {
         const uint32_t before = v.run.pc();
         const bool stepped = [&] {
             if (!vuprof::enabled()) return v.run.step();
-            const uint64_t t0 = __builtin_ia32_rdtsc(), i0 = v.run.pipe().issued;
+            const uint64_t t0 = prof_ticks(), i0 = v.run.pipe().issued;
             const bool r = v.run.step();
-            vuprof::counter(3).ns += __builtin_ia32_rdtsc() - t0;  // (TSC ticks here)
+            vuprof::counter(3).ns += prof_ticks() - t0;  // (TSC ticks here)
             ++vuprof::counter(3).runs;
             if (v.run.pipe().issued - i0 == 1) ++vuprof::counter(5).runs;  // (a call that ran one instruction: the exact step function)
             return r;
@@ -330,10 +346,10 @@ void call(uint32_t addr) {
     Vu0& v = global();
     drain();
     if (vuprof::enabled()) ++vuprof::starts()[addr];
-    const uint64_t t0 = vuprof::enabled() ? __builtin_ia32_rdtsc() : 0;
+    const uint64_t t0 = vuprof::enabled() ? prof_ticks() : 0;
     const VuNativeStep port = port_for(addr);
     if (vuprof::enabled()) {
-        vuprof::counter(4).ns += __builtin_ia32_rdtsc() - t0;
+        vuprof::counter(4).ns += prof_ticks() - t0;
         ++vuprof::counter(4).runs;
     }
     capture(v, addr);
