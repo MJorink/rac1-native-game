@@ -109,6 +109,8 @@ With Lighting on Original (the default) the picture is unchanged.
 - Pre-rendered movies no longer add to the time played, as on the PS2 (#24).
 - The Controls page: a mouse movement no longer rebinds the D-pad, only the sticks, as the page's
   help says (#61).
+- Strafing: letting go of L2 / R2 with the stick still held to the side no longer makes the camera
+  jiggle.
 
 ### Building
 - The CI also builds on Linux ARM64. It does not block yet: the ARM64 port is in progress (#78).
