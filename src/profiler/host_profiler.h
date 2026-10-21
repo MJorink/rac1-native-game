@@ -21,7 +21,24 @@ namespace rac1::prof {
 enum Stage : int {
     kEvents,            // the window's events, the input, the debug menu's poll, the settings applied (the loop's top)
     kGameFrames,        // the game frames' host side: the pad, the MRP's per-frame captures, the RAM hash ...
-    kGameCode,          // the game's own update: the EE code on its coroutine
+    kGameCode,          // the game's own update: the EE code on its coroutine (what its sub-stages below leave: the frame's set-up, the
+                        // other game modes, the frame's end)
+    // the game code's sub-stages (StageInfo::game; zones inside the EE coroutine, nested in kGameCode): where the game's own
+    // update goes. The game logic (0x297f78's passes), the rendering preparation done by game code (0x1f85b8's passes: the
+    // packets, the VU0 work), and the host's re-runs of game passes for the renderer (the LOD slider's / widened view's)
+    kGameLogic,         // the gameplay frame's own work and its passes without a sub-stage (sound, lights, HUD, menus' checks)
+    kGameMobyUpdates,   // the mobys' updates (0x2648e0), the sound emitters, the wind
+    kGameHero,          // the hero's frame (0x2070d0)
+    kGameParticles,     // the particles' update (0x267c08), the spin timers
+    kGameCamera,        // the camera (0x1ed0a8)
+    kGameRender,        // the frame's drawing (0x1f85b8) without a sub-stage: the view, the zones, the static packets, the drop shadows
+    kGameWorldPasses,   // the world passes: sky, tfrag, tie, shrub (visibility, LOD, the VU1 chains)
+    kGameMobyPass,      // the moby pass (0x250038): the draw loop, the mobys' packets, the textures
+    kGameMobyJoints,    // the mobys' joints and skinning (0x251490's VU0 work), in the real pass and the re-run
+    kGameEffects,       // the 3D effects' drawing (particles, glows ...) and the draw lists
+    kGameWorldEnd,      // the world passes' lighting and ends after the DMA waits, the moby texture slots
+    kGameLodMobys,      // host: the moby pass re-run for the LOD slider / the widened view (journaled, the memory put back)
+    kGameLodOther,      // host: the world passes', effects' and draw lists' re-runs for the LOD slider / the widened view
     kAudioStep,         // the IOP's mirror and the audio queue stepped (main thread)
     kPrepare,           // the frame's preparation: the view, what the draw reads of the game's state
     kChainCapture,      // the GS chain captured (its run started on the GS chain worker), the MRP world's scene started
@@ -54,19 +71,21 @@ struct StageInfo {
     bool wait;      // the main thread waits there (for another thread, the display or the cap): not its own work
     bool gpu;       // timed on the GPU too
     uint32_t color; // ImGui's ABGR
+    bool game = false;  // a part of the game code (kGameCode and its sub-stages): Summary::game_code is their sum
 };
 const StageInfo& stage_info(int s);
 
 // The worker threads whose jobs are timed (their busy wall time and their CPU time, per frame).
-enum Worker : int { kWorkerChain, kWorkerScene, kWorkerCount };
+enum Worker : int { kWorkerChain, kWorkerScene, kWorkerJobs, kWorkerCount };  // (kWorkerJobs: the job pool's workers, src/jobs, their times summed)
 const char* worker_name(int w);
 
 namespace detail {
 extern std::atomic<bool> g_on;
+extern uint32_t g_zone_gen;  // (the frame's zones' generation: a zone left open across frames, the EE coroutine suspended in it, is not closed twice)
 int zone_begin(Stage s);
 void zone_end(int z);
 void job_begin(int w, double* t0, double* c0);
-void job_end(int w, double t0, double c0);
+void job_end(int w, double t0, double c0, int lane);
 }  // namespace detail
 
 // Whether the profiler records this frame.
@@ -75,22 +94,23 @@ inline bool on() { return detail::g_on.load(std::memory_order_relaxed); }
 // A stage's zone on the main thread (RAII): CPU wall time, and a GPU timestamp pair when the stage has one.
 struct Zone {
     int z;
-    explicit Zone(Stage s) : z(on() ? detail::zone_begin(s) : -1) {}
+    uint32_t gen;
+    explicit Zone(Stage s) : z(on() ? detail::zone_begin(s) : -1), gen(detail::g_zone_gen) {}
     ~Zone() {
-        if (z >= 0) detail::zone_end(z);
+        if (z >= 0 && gen == detail::g_zone_gen) detail::zone_end(z);
     }
     Zone(const Zone&) = delete;
     Zone& operator=(const Zone&) = delete;
 };
-// A worker's job (RAII), on that worker's thread.
+// A worker's job (RAII), on that worker's thread (`lane`: which of the job pool's workers, its own track in a trace).
 struct Job {
-    int w;
+    int w, lane;
     double t0 = 0, c0 = 0;
-    explicit Job(Worker k) : w(on() ? static_cast<int>(k) : -1) {
+    explicit Job(Worker k, int lane_ = 0) : w(on() ? static_cast<int>(k) : -1), lane(lane_) {
         if (w >= 0) detail::job_begin(w, &t0, &c0);
     }
     ~Job() {
-        if (w >= 0) detail::job_end(w, t0, c0);
+        if (w >= 0) detail::job_end(w, t0, c0, lane);
     }
     Job(const Job&) = delete;
     Job& operator=(const Job&) = delete;

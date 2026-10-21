@@ -64,10 +64,18 @@ longer (the dumps' GL object counts included). `RAC1_PROFILER_DUMP`, `RAC1_PROFI
   the frame captures, the debug menu itself), the profiler's own readback and sampling (with Mesa's GL thread a
   query's result is a sync: the driver's back-pressure can show there), the frame cap's wait and the present (the
   swap: the v-sync, or the driver's queue full when the GPU is behind).
+  The game's code has sub-stages of its own (zones inside the EE coroutine, around the game's passes; "game code" in
+  the summary is their sum): the game logic (the gameplay frame's own work, the mobys' updates, the hero, the
+  particles' update, the camera) and the rendering preparation the game's code does (the frame's drawing without a
+  sub-stage, the world passes, the moby pass's draw loop, the mobys' joints and skinning on the VU0, the effects and
+  draw lists, the world lighting and the passes' ends), and the host's re-runs of game passes for the LOD slider and
+  the widened view (the moby pass's, and the others': world, effects, draw lists). A zone left open when the coroutine
+  waits for a vsync inside a blocking loop is closed with the game code's own zone.
 - **Bottleneck**: GPU-bound (the GPU busy for 85 % of the frame or more), bound by a worker (the main thread waits
   15 % of the frame or more for the MRP scene build or the GS chain), CPU-bound on the main thread (its own work 85 %
   of the frame or more), or held by the frame cap / v-sync.
-- **Threads**: the GS chain worker's and the MRP scene worker's busy and CPU time per frame (their jobs timed), and
+- **Threads**: the GS chain worker's and the MRP scene worker's busy and CPU time per frame (their jobs timed), the job
+  pool's workers' (`src/jobs`, summed over its workers; a track each in the Chrome trace), and
   every thread of the process with its CPU % (Linux: `/proc/self/task/*/schedstat`; Windows: the threads' times;
   the driver's threads included), and the process's CPU %.
 - **Memory**: the process's resident memory and its peak (Linux `/proc/self/status`; Windows
