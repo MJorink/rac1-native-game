@@ -661,54 +661,38 @@ distance.
 
 ## Sun rays
 
-Options > Graphics > Sun Rays (Off, Low, High; Off by default), our choice, not the game's: shafts of
-light where the sun shines through an opening - a tunnel's mouth, the gaps between trees or
-buildings, a window (Kerwan's first tunnel, with the level's sun ahead, is the showcase). An open
-sky around the sun gives none: turning the camera toward the sun outdoors adds nothing unless
-something stands between the sky and the sun. Screen space, at an eighth of the 3D's resolution
-(`sun_rays_pass` in `mrp_lighting.cpp`), after the mobys and the occlusion, before the effects, the
-particles and the 2D:
+Options > Graphics > Sun Rays (Off, Low, Medium, High; Off by default), our choice, not the game's:
+shafts of light from the sun where the sky shows through the scene - a tunnel's mouth, the gaps
+between trees, the sky around Aridia's planet (Kerwan's first tunnel, with the level's sun in front,
+is the showcase). Screen space, at a fraction of the 3D's resolution (`sun_rays_pass` in
+`mrp_lighting.cpp`), after the mobys and the occlusion, before the effects, the particles and the 2D:
 
-1. The sky and its brightness at an eighth: the depth from the ambient occlusion's copy when it made
-   one this frame (else a blit of the depth at an eighth), one texel of each 8 x 8; the colour from a
-   blit at an eighth.
-2. The mask: each sky texel near the sun's place (fading over about half the view's height) counts
-   only when something stands between it and the sun - 12 taps marched toward the sun's place as far
-   as the view goes (beyond its edge: taken as open) -, times its brightness. The sky through a
-   tunnel's mouth is hidden from the sun by the rim, the sky between leaves by the leaves; an open sky
-   around the sun, or above a ridge or the horizon, has nothing between and gives nothing. A dark sky
-   gives nothing either.
-3. The gate: how much of the view the mask covers, followed over a few frames (rays fade in and out
-   as an opening comes into view), read back two frames later without a wait. While it is shut the
-   next steps are skipped and the gate is measured every 4th frame only.
-4. A radial blur of the mask toward the sun (24 taps, each weaker than the one before, each from the
-   mask's mip level that covers its step: no noise), faded out 0.8 .. 1.15 of the view's height from
-   the sun.
-5. Added to the picture in the key light's colour, only in the box 1.15 view heights around the sun,
-   with a soft limit (at most +0.28 Low, +0.45 High a texel).
+1. The mask: the sky's texels (depth 1) near the sun's place on the screen, their colour half tinted
+   by the key light's; everything else black, so only openings toward the sky give rays.
+2. A radial blur of the mask toward the sun (each tap weaker than the one before).
+3. Added to the picture with a soft limit (at most +0.28 a texel, High +0.45), so a wide sky in
+   front of the sun does not burn the picture white.
 
-The rays fade out as the sun leaves the screen (gone 0.6 of the view beyond its edge) or goes behind
-the camera, and follow the sun's weight: none where the zone has no sun, in the level's
-[interiors](#interiors), with the Lighting on Original. The cascades are not used. With a sun high in
-the sky (Novalis, Eudora: 43 and 50 degrees) the game's camera rarely sees it: the rays show where
-the camera looks up.
+The steps (`kRaysSteps`) are the look of 0.4.x's rays at a lower or higher quality and cost: the
+mask's and the blur's resolution and the blur's taps (their reach and fall-off the same: the decay a
+tap is 0.945 to the power 40 / taps, the weight 4 / taps). Low and Medium have the strength of
+0.4.x's Low, Medium its exact picture (to the pixel); High has the strength of 0.4.x's High (twice
+the gain, at most +0.45 a texel) at a finer resolution. Settings and saves from then read Low as
+Medium and High as High.
 
-**Cost** on the GPU at 5053 x 1371 with a Radeon 890M (Kerwan, the first tunnel and the plaza after
-it; the pass's own time, and the frame's GPU time with the rays Off / Low):
+| Step | Resolution | Taps | GPU at 5053 x 1371 (Radeon 890M; Kerwan's tunnel, Aridia's planet) |
+|---|---|---|---|
+| Low | an eighth | 24 | 0.57, 0.66 ms |
+| Medium | a quarter | 40 | 0.89, 1.04 ms (the 0.4.x Low: 0.96, 1.04) |
+| High | a third | 56 | 1.26, 1.45 ms |
 
-| | Before (0.4.x dev) | Now |
-|---|---|---|
-| Sun on or near the screen, rays showing | 1.3 ms | about 0.45 - 0.55 ms |
-| Sun near the screen, no opening (the gate shut) | 1.3 ms | about 0.1 ms (measured every 4th frame) |
-| Sun off the screen | none | none |
-| Ambient occlusion off (the depth blitted by the rays) | 1.6 ms | about 0.7 ms with rays |
-
-The old pass copied the colour and the depth at a quarter every frame (a scaled blit of the depth
-costs about as much as the texels it writes: 0.45 ms at a quarter) and blended the whole screen.
-Where the time goes now: the full-size add (about 0.2 ms, halved by its box on a wide view), the blur
-(about 0.1), the copies and the small passes. `RAC1_SUN_RAYS` (0 / 1 / 2) overrides the option,
-`RAC1_SUN_RAYS_TRACE` prints the sun's place, the openings' share, the gate and the pass's GPU time
-(`=3`: every frame), `RAC1_SUN_RAYS_GAIN` scales the strength (testing).
+Most of each step's cost is the copies of the 3D's depth and colour at its size (reading the depth
+buffer costs a pass over all of it) and the add over the whole picture; the blur is the rest. The
+rays fade out as the sun leaves the screen (gone 0.6 of the view beyond its edge; nothing is drawn
+then) or goes behind the camera, and follow the sun's weight: none where the zone has no sun, in the
+level's [interiors](#interiors), with the Lighting on Original. The cascades are not used.
+`RAC1_SUN_RAYS` (0 to 3) overrides the option, `RAC1_SUN_RAYS_TRACE` prints the sun's place, the
+gain and the GPU time, `RAC1_SUN_RAYS_GAIN` scales the strength (testing).
 
 ## Ambient occlusion
 
@@ -825,7 +809,7 @@ does not turn the lighting on.
 |---|---|---|---|
 | Lighting | Original, Low, Medium, High | Original | the whole module; the sun shadow maps' resolution (1024, 2048, 4096) |
 | Shadow Strength | 50 to 100 % | 70 % | how much of the sun's light a shadow hides (`shadow_strength` in the preferences, item 45 of a save's block) |
-| Sun Rays | Off, Low, High | Off | light shafts from the sun through openings (`sun_rays`, item 46); see [Sun rays](#sun-rays) |
+| Sun Rays | Off, Low, Medium, High | Off | light shafts from the sun through openings, the steps the same look at more quality (`sun_rays_quality`, item 49; `sun_rays` and item 46 until 0.4.x read with Low as Medium); see [Sun rays](#sun-rays) |
 | Shadow Distance | Low, Medium, High, Maximum | Maximum | how far mobys cast sun shadows (40, 80, 140 units, or as far as the cascades reach) |
 | Dynamic Shadows | Off, On | Off | point-light cube shadows |
 | Secondary Lights | Off, Game's, All | All | Game's: the game's point lights per pixel; All: also automatic emitters and hand-placed lights |

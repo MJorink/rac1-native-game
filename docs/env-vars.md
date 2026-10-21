@@ -1,12 +1,12 @@
 # Environment variables
 
-rac1-native reads a number of `RAC1_*` environment variables. This page lists all of them: 302 in
+rac1-native reads a number of `RAC1_*` environment variables. This page lists all of them: 307 in
 total, in three groups.
 
 | Group | Count | Who it is for |
 |---|---|---|
 | [Player](#player-variables) | 18 | Settings a player may want to change: files, window, audio, the ISO |
-| [Debugging](#debugging-variables) | 224 | Developers: profilers, overlays, switching a renderer or an optimisation on or off to compare |
+| [Debugging](#debugging-variables) | 229 | Developers: profilers, overlays, switching a renderer or an optimisation on or off to compare |
 | [Automated testing](#automated-testing-variables) | 60 | Scripted and headless runs: frame counts, screenshots, simulated input, self-checks |
 
 The oracle (`build/tests/ovl_oracle`) reads variables of its own (`ORACLE_*`, `RAC1_ORACLE_DUMPS`): see
@@ -93,6 +93,8 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_GS_TRACE` | set (any value) = on; default off | Prints, once a second, a summary of the GS packet chain (primitive count, display size, offsets) and pad presses; also forces the chain to run on the main thread. |
 | `RAC1_GS_ZTRACE` | game frame number; default off | At that frame prints the depth, scissor, test and vertex state of every GS primitive; also forces the chain to run on the main thread. |
 | `RAC1_HERO_TRACE` | set (any value) = on; default off | Prints the hero's state in the drawn scene each frame. |
+| `RAC1_HUD` | 4:3, 16:9, 21:9, 32:9 or fit; unset = Options > Graphics > HUD (4:3 in a headless run) | The HUD's width in a widened view (Options > Graphics > HUD): its left and right elements moved toward the edges of a box of that shape, never wider than the view. Needs a widened view (RAC1_VIEW_MODE=2, or the 16:9 frame). |
+| `RAC1_JOBS` | integer N (1 .. 64); default about half the logical CPUs less two, at most 8 | The threads the host's job pool spreads the renderer's scene building over (the moby chains' decoding, the moby draw lists' transforms: `src/jobs`), the main thread included; 1 runs it all on the main thread, for comparison (the output is the same on any number of threads). |
 | `RAC1_LIGHTS_DIR` | directory; default data/lights | Directory of the per-level user light files (levelNN.txt) loaded and saved by the in-game light editor. |
 | `RAC1_LIGHTS_JUMPS` | set (any value) = on; default off | Prints a line whenever a point light's weight changes abruptly between two frames, to find lights popping on and off. |
 | `RAC1_LIGHTS_WHITE` | set (any value) = on; default off | With the modern lighting, prints the tie classes partly textured near white (neon panels the automatic emitters do not take), their share and instance count. |
@@ -174,6 +176,7 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_MRP_WIDEN_EFFECTS` | 0 = off; default on | Switches off the widescreen widening of the effects (particles and similar) so they are culled as in 4:3. |
 | `RAC1_MRP_WIDEN_GLOWS` | 0 = off; default on | Switches off the widening of the glows and other drawn-list objects at the sides of a widescreen view, to compare. |
 | `RAC1_MRP_WIDEN_LISTS` | 0 = off; default on | Switches off the widening of the draw lists' callbacks (the levels' water, lava and sand-sea surfaces, culled against the 4:3 clip matrix) at the sides of a widened view, to compare. |
+| `RAC1_MRP_WIDEN_SIDES` | 0 = off; default on | Switches off the widening of the VU1 shadow-mesh program's side test (it drops a clipped triangle lying wholly past 4 / 3 of the 4:3 frame's half width: Aridia's sand sea near the camera at the far sides of a 32:9 view) in a widened view, to compare. |
 | `RAC1_MRP_WIDEN_TERMS` | 0 = off; default on | Switches off the widening of the other frustum tests the draw lists' callbacks make in a widened view (the point test 0x2002e0 that the water, lava and sand-sea grids cull their cells with, the quad drawer's reject of quads past the sides), as before, to compare. |
 | `RAC1_MUSIC_TRACE` | set (any value) = on; default off | Prints the music streams' state (sequence step, tracks, music and dialogue slots) each frame it changes. |
 | `RAC1_OVERSCAN` | 0 = full frame, 1 = the TV's area, or `left,right,top,bottom` in pixels; unset = the full frame | Cuts the frame's 2D to a TV's area (the overscan crop), to compare. The game always shows the full frame. |
@@ -193,11 +196,11 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_PROFILER_CSV` | output file path; unset = off | Turns the host's frame profiler on (the debug menu's Profiler tab, see [the dev tools](../src/_devtools/README.md#the-profiler)) and writes one CSV row per host frame: its period, the game frames it ran, the main thread's CPU time, each stage's CPU and GPU milliseconds, the GPU's busy time and span, the workers' busy and CPU time. Rows come a few frames late (the GPU's timestamps are read back without waiting). |
 | `RAC1_PROFILER_DUMP` | integer N frames (any non-positive value = 120); unset = off | Turns the host's frame profiler on and prints a `[profiler]` summary of the last N host frames every N frames: fps, frame time min / avg / max / p99 / 1 % low, the main thread's work (game code and host) and waits, the GPU's busy time, the bottleneck, each stage's CPU and GPU time, the workers, every thread's CPU %, the process's memory, the GPU's memory (Linux DRM fdinfo, GL_NVX_gpu_memory_info / GL_ATI_meminfo) and the GL objects per owner. Works headless; what the Profiler tab shows, in the log. |
 | `RAC1_PROFILER_OVERLAY` | 1 = on; default off | With the debug tools (or RAC1_DEVMENU_SHOT), the debug menu's profiler overlay is on from the start (fps, CPU / GPU, the bottleneck, a small graph and the stages' bars), as its Overlay box does. |
-| `RAC1_PROFILER_TRACE` | `file[,from[,frames]]`, from a host frame number (default 120), frames (default 300); unset = off | Records a Chrome trace (chrome://tracing, ui.perfetto.dev) of that many host frames: the main thread's stages, the GPU's (its timestamps on the CPU's time line), the GS chain and MRP scene workers' jobs, the host frames; written when done (and at exit). |
+| `RAC1_PROFILER_TRACE` | `file[,from[,frames]]`, from a host frame number (default 120), frames (default 300); unset = off | Records a Chrome trace (chrome://tracing, ui.perfetto.dev) of that many host frames: the main thread's stages (the game code's sub-stages among them), the GPU's (its timestamps on the CPU's time line), the GS chain and MRP scene workers' jobs, the job pool's workers' jobs (a track each), the host frames; written when done (and at exit). |
 | `RAC1_RENDER_SCALE` | integer percent; unset = the Options setting | Overrides the 3D render scale, as a percentage of the window. |
 | `RAC1_RENDER_SHADE` | integer; 1 = vertex colours alone; default 0 | Debug view that shades with the vertex colours alone. |
 | `RAC1_SAMPLE_FROM` | frame number; default 0 (sample from the start) | Used with RAC1_SAMPLE_PROF: sampling starts at this frame. |
-| `RAC1_SAMPLE_PROF` | output file path; unset = off | Turns on a built-in sampling profiler of the main thread (every 0.5 ms) and writes the samples to the given file at exit. |
+| `RAC1_SAMPLE_PROF` | output file path; unset = off | Turns on a built-in sampling profiler of the main thread (every 0.5 ms) and writes the samples to the given file at exit. Use a build without `RAC1_NATIVE_ARCH`: with it, the unwinder (glibc's `backtrace` in the signal) can crash in an AVX function's realigned frame. |
 | `RAC1_SHADOWS` | 0 = off, 1 = on; default 0 (the Options Lighting setting applies unless this is set) | Forces the modern shadows and lighting on or off, overriding the Options setting. |
 | `RAC1_SHADOW_CACHE` | 0 = off, 1 = on; default 1 | Switches the static shadow cache off or on, to compare speed and look. |
 | `RAC1_SHADOW_CAST_KINDS` | bit mask: 1 ties, 2 shrubs, 4 tfrags; default 7 in the world renderer and 3 in the static caster code | Chooses which kinds of world geometry cast shadows, to find which one causes a problem. |
@@ -236,9 +239,9 @@ The variables are read in `src/` and `runtime/` (search for `"RAC1_` to find the
 | `RAC1_SUN_COVER_TRACE` | set (any value) = on; default off | Every 60 frames prints how much of the view sees the sun, the sky's share, whether the camera is outdoors (near a place the sky was seen from) and the sun's weight scale that follows from them. |
 | `RAC1_SUN_DIR` | three comma-separated floats "x,y,z"; unset = the level's own sun direction | Turns the modern lighting's sun to that direction toward it (normalised; ignored if near zero length), as a level's `sun` line would: the world and the mobys lit from it, the key light's colour kept; where the zone has no sun, a sun of weight 1 with the shadows' share (`RAC1_SHADOW_STRENGTH`). |
 | `RAC1_SUN_LEVEL` | set (any value) = on; default off | The modern lighting's sun always uses the level's light set 0 (the old way) instead of the light set the hero is lit with. See [Lighting](lighting.md). |
-| `RAC1_SUN_RAYS` | 0 off, 1 Low, 2 High; default the option (Off) | The modern lighting's sun rays, overriding Options > Graphics > Sun Rays. See [Lighting](lighting.md#sun-rays). |
+| `RAC1_SUN_RAYS` | 0 off, 1 Low, 2 Medium, 3 High; default the option (Off) | The modern lighting's sun rays, overriding Options > Graphics > Sun Rays (until 0.4.x 1 was Low - now Medium's picture - and 2 High). See [Lighting](lighting.md#sun-rays). |
 | `RAC1_SUN_RAYS_GAIN` | float; default 1 | Testing: multiplies the sun rays' strength. |
-| `RAC1_SUN_RAYS_TRACE` | set (any value) = on, 3 = every frame; default off | Every 60 frames (3: every frame the pass runs) prints the sun's place on the screen, the share of the view lit by openings, the rays' gate and gain, and every 60 frames their GPU time. |
+| `RAC1_SUN_RAYS_TRACE` | set (any value) = on; default off | Every 60 frames prints the sun's place on the screen, the rays' gain and their GPU time. |
 | `RAC1_SUN_TRACE` | set (any value) = on; default off | Prints the light sets the hero is lit with, for the modern lighting's sun. See [Lighting](lighting.md). |
 | `RAC1_TFRAG_LIGHT_TRACE` | <every>[,x,y,z,r]; default off | Every <every> drawn frames with the modern lighting on, takes the terrain's (tfrag) lit vertex colours within r units (default 12) of the hero, or of x,y,z, apart as the game's relighting makes them: base colour, the light set's two directional terms, against the colour in EE memory; prints the means, the light sets used and the sun. See [Lighting](lighting.md). |
 | `RAC1_TF_HITS` | integer; default 2 | Testing threshold for the terrain shadow build: a candidate with fewer than this many hits is discarded. |

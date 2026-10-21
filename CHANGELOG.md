@@ -20,12 +20,31 @@ played through the game on it, and the launcher installs and updates it with a d
   still cut, listed in [Rendering](docs/rendering.md#widescreen-and-render-scale).
 - **Widescreen:** the Visibomb's camera view is green with scan lines across the whole screen, and
   its out-of-range static covers the whole screen too (both stopped at the 4:3 middle).
+- **Widescreen HUD:** a new Graphics row, HUD (4:3 Original, 16:9, 21:9, 32:9, Fit Screen), spreads
+  the HUD over a wider box when the 3D is widened: the ammo, the quick select and the other elements
+  the game puts at the left move left, the bolts, the air meter and the others at the right move
+  right; health and the centred messages stay. On a 32:9 screen, 16:9 or 21:9 keeps it within a
+  glance of the middle. 4:3 Original, the default, is the original's layout.
 - The title menu's frames and the Vendor's monitors line up at any Field of View and in widescreen
   (#68).
 - Text scaled up by the modern renderer no longer shows thin lines from the neighbouring letters
   (#76).
 - Faster: the Gadgetron Vendor's screens and some of the GPU work; no more hitch when the pause
   menu opens.
+
+### Performance
+- **Less CPU time for the game's own update** (the EE code, on one thread as on the PS2), the game's
+  state the same bit for bit: the VU0 macro ops keep their flags in registers through the mobys'
+  joints and the moby draw loop, and the renderer's moby scene (the chains' decoding, the draw lists'
+  transforms) is built on several cores (`src/jobs`, deterministic). With the modern lighting at
+  5053x1371 and the widened view, the game's update went from 14.2 to 12.1 ms a frame on Kerwan, 12.7
+  to 11.1 on Rilgar, 9.7 to 8.5 on Hoven, the moby draw lists from 2.3 to 2.0 ms (Kerwan).
+- **`./setup.sh --native-arch on`** compiles the game for your own CPU (AVX2, AVX-512 where it has
+  them): about 8 % less again (Kerwan 11.2 ms, Rilgar 10.3, Hoven 7.9), the same game state. Off by
+  default: such a build runs on that CPU only.
+- The Profiler tab splits the game's code into its parts: the game logic (mobys, hero, particles,
+  camera), the rendering preparation the game's code does (world passes, moby pass, joints and
+  skinning, effects) and the host's re-runs for the LOD slider and the widened view.
 
 ### Lighting (the optional modern lighting, still experimental)
 - **Shadows without tiers:** a point is lit or in shadow, whatever blocks the sun, near or far;
@@ -45,9 +64,9 @@ played through the game on it, and the launcher installs and updates it with a d
   Novalis's neon tubes and hanging bulbs, Kerwan's street lamps, Oltanis's plaza lamps. A lamp can
   be aimed down (a pool of light on the floor under it): Novalis's neons now light the floor and the
   walls below them, which a flat plate under the yellow press had put in its shadow, and were too weak.
-- **Sun Rays** (Options > Graphics: Off, Low, High): shafts of light where the sun shines through
-  an opening (a tunnel's mouth, between trees or buildings); an open sky around the sun gives none.
-  About 0.45 ms of GPU at 5053 x 1371 with rays showing, almost nothing otherwise.
+- **Sun Rays** (Options > Graphics: Off, Low, Medium, High): shafts of light from the sun where the
+  sky shows through the scene. Medium is the earlier Low, High the earlier High at a finer
+  resolution, Low a cheaper Medium (settings and saves with Low read as Medium, High as High).
 - **Ambient Occlusion** has six values (Off, SSAO, SSAO+, HBAO, GTAO, GTAO at half resolution), and
   each mode is now visible and different (#75).
 - **AO Intensity** (Options > Graphics, 25 to 125 %, default 75 %): how dark the ambient occlusion

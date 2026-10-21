@@ -465,6 +465,7 @@ void Gs::vertex_kick(const Vertex& vin, bool draw) {
         p.fx = fx_now_;
         p.fx_id = fx_id_;
         p.layer = layer_now_;
+        p.hud = hud_now_;
         prims_.push_back(std::move(p));
     }
     switch (type) {
@@ -678,6 +679,12 @@ void Gs::set_chain_layers(std::vector<std::pair<uint32_t, uint32_t>> ranges) {
     layer_ranges_ = std::move(ranges);
 }
 
+// (host) see gs_emu.h
+void Gs::set_chain_hud(std::vector<HudRange> ranges) {
+    std::sort(ranges.begin(), ranges.end(), [](const HudRange& a, const HudRange& b) { return a.first < b.first; });
+    hud_ranges_ = std::move(ranges);
+}
+
 void Gs::set_chain_skips(std::vector<SkipRange> ranges) {
     std::sort(ranges.begin(), ranges.end(), [](const SkipRange& a, const SkipRange& b) { return a.first < b.first; });
     skip_ranges_ = std::move(ranges);
@@ -710,6 +717,8 @@ void Gs::chain_walk(uint32_t tag, uint32_t end, Mem&& mem) {
             g.fx_now_ = 0;
             g.layer_ranges_.clear();
             g.layer_now_ = false;
+            g.hud_ranges_.clear();
+            g.hud_now_ = 0;
         }
     } clear_skips{*this};
     struct ClearSub {  // (host) the substitutes last for one chain
@@ -719,6 +728,17 @@ void Gs::chain_walk(uint32_t tag, uint32_t end, Mem&& mem) {
             g.sub_wide_ = g.sub_drop_ = g.vundo_on_ = false;
         }
     } clear_sub{*this};
+    struct SideWiden {  // (host) the view's widening for the VU1 programs this walk runs (set_side_widen), on this thread
+        float before[2];
+        explicit SideWiden(const float w[2]) : before{vu1::g_side_widen[0], vu1::g_side_widen[1]} {
+            vu1::g_side_widen[0] = w[0] > 1.0f ? w[0] : 1.0f;
+            vu1::g_side_widen[1] = w[1] > 1.0f ? w[1] : 1.0f;
+        }
+        ~SideWiden() {
+            vu1::g_side_widen[0] = before[0];
+            vu1::g_side_widen[1] = before[1];
+        }
+    } side_widen{side_widen_};
     std::vector<uint32_t> stack;
     std::vector<uint8_t> buf;
     uint32_t addr = tag & 0x01fffff0u;
@@ -836,6 +856,11 @@ void Gs::chain_walk(uint32_t tag, uint32_t end, Mem&& mem) {
                                        [](uint32_t a, const std::pair<uint32_t, uint32_t>& r) { return a < r.first; });
             layer_now_ = it != layer_ranges_.begin() && addr <= std::prev(it)->second;
         }
+        hud_now_ = 0;
+        if (!hud_ranges_.empty() && !in_sub) {  // (a HUD element's: the real chain's tags)
+            auto it = std::upper_bound(hud_ranges_.begin(), hud_ranges_.end(), addr, [](uint32_t a, const HudRange& r) { return a < r.first; });
+            if (it != hud_ranges_.begin() && addr <= std::prev(it)->last) hud_now_ = std::prev(it)->side;
+        }
         if (dry_) {
             ++skipped_tags_;
             if (!skip_started_[k]) {  // the range's VU1 program starts, once
@@ -941,6 +966,8 @@ void Gs::capture_chain(uint32_t tag, uint32_t end, ChainCapture& c) const {
     c.size = 0;
     c.spans.clear();
     c.subs.clear();
+    c.side_widen[0] = side_widen_[0];
+    c.side_widen[1] = side_widen_[1];
     for (int k = 0; k < static_cast<int>(subs_.size()); ++k) c.subs.push_back({subs_[static_cast<size_t>(k)].first, subs_[static_cast<size_t>(k)].end, sub_size_of(k)});
     auto take = [&c, this](uint32_t a, uint32_t len) -> const uint8_t* {
         const uint8_t* src = sub_mem(a);
@@ -1024,6 +1051,8 @@ void Gs::vif1_chain(const ChainCapture& c) {
         v.replay_size = u[2];
         subs_.push_back(std::move(v));
     }
+    side_widen_[0] = c.side_widen[0];
+    side_widen_[1] = c.side_widen[1];
     chain_walk(c.tag, c.end, [&c, &at](uint32_t a, uint32_t) -> const uint8_t* {
         if (at < c.spans.size() && c.spans[at][0] == a) {
             const auto& sp = c.spans[at++];
