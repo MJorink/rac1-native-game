@@ -25,6 +25,20 @@ played through the game on it, and the launcher installs and updates it with a d
 - Faster: the Gadgetron Vendor's screens and some of the GPU work; no more hitch when the pause
   menu opens.
 
+### Performance
+- **Less CPU time for the game's own update** (the EE code, on one thread as on the PS2), the game's
+  state the same bit for bit: the VU0 macro ops keep their flags in registers through the mobys'
+  joints and the moby draw loop, and the renderer's moby scene (the chains' decoding, the draw lists'
+  transforms) is built on several cores (`src/jobs`, deterministic). With the modern lighting at
+  5053x1371 and the widened view, the game's update went from 14.2 to 12.1 ms a frame on Kerwan, 12.7
+  to 11.1 on Rilgar, 9.7 to 8.5 on Hoven, the moby draw lists from 2.3 to 2.0 ms (Kerwan).
+- **`./setup.sh --native-arch on`** compiles the game for your own CPU (AVX2, AVX-512 where it has
+  them): about 8 % less again (Kerwan 11.2 ms, Rilgar 10.3, Hoven 7.9), the same game state. Off by
+  default: such a build runs on that CPU only.
+- The Profiler tab splits the game's code into its parts: the game logic (mobys, hero, particles,
+  camera), the rendering preparation the game's code does (world passes, moby pass, joints and
+  skinning, effects) and the host's re-runs for the LOD slider and the widened view.
+
 ### Lighting (the optional modern lighting, still experimental)
 - **Shadows without tiers:** a point is lit or in shadow, whatever blocks the sun, near or far;
   overlapping shadows no longer add up or cancel.

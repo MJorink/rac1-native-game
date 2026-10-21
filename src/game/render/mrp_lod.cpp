@@ -20,6 +20,7 @@
 #include <game/render/render_view.h>
 #include <runtime/kernel/ee_memory.h>
 #include <runtime/vu/vu0.h>
+#include <profiler/host_profiler.h>
 
 #include <algorithm>
 #include <array>
@@ -460,6 +461,7 @@ struct Pending {
 
 // orig: (host) see mrp_lod.h
 void mrp_lod_world_shadow(int kind, void (*pass)(), uint32_t cur) {
+    RAC1_PROF_ZONE(kGameLodOther);
     static const bool selftest = std::getenv("RAC1_MRP_LOD_SELFTEST") != nullptr;  // (testing: the shadow run with nothing scaled)
     static const bool verify = std::getenv("RAC1_MRP_LOD_VERIFY") != nullptr;      // (testing: the whole memory compared after)
     static const bool probe_env = std::getenv("RAC1_MRP_LOD_PROBE") != nullptr;
@@ -632,6 +634,7 @@ float mrp_lod_effects_widen() { return g_ps.running ? g_ps.widen : 1.0f; }
 
 // orig: (host) see mrp_lod.h
 void mrp_lod_effects_shadow(void (*pass)(), uint32_t cur) {
+    RAC1_PROF_ZONE(kGameLodOther);
     g_ps.pending = false;
     if (g_mrp_lod_frame_drawn) g_ps.ready = false;  // (a drawn frame: its own effects only)
     const bool drawn_valid = g_ps.drawn_valid;
@@ -751,6 +754,7 @@ struct ListShadow {
 
 // orig: (host) see mrp_lod.h
 void mrp_lod_list_shadow(int list, void (*block)(), uint32_t cur) {
+    RAC1_PROF_ZONE(kGameLodOther);
     if (list < 0 || list > 1) return;
     ListShadow& L = g_ls[list];
     L.pending = false;
@@ -879,6 +883,7 @@ struct MobyStats {
 
 // orig: (host) see mrp_lod.h
 void mrp_lod_moby_shadow(void (*pass)()) {
+    RAC1_PROF_ZONE(kGameLodMobys);
     static const bool verify = std::getenv("RAC1_MRP_LOD_VERIFY") != nullptr;
     if (!mrp_moby_ready() || vu0::running()) return;
     const float s = mrp_lod_scale(g_mrp_lod);
